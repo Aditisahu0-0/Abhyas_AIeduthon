@@ -29,7 +29,17 @@ class ModelDownloader extends ChangeNotifier {
   static const String MINILM_MODEL_FILENAME = 'minilm.tflite';
   static const int MINILM_EXPECTED_SIZE_MB = 25;
   
-  static const String HF_TOKEN = 'REDACTED_HF_TOKEN';
+  // Do NOT hard-code tokens. Provide the Hugging Face token via environment
+  // variables or secure storage. For development you can set the environment
+  // variable `HF_TOKEN`. On mobile, prefer a secure solution (flutter_dotenv
+  // or secure storage) and never commit tokens to source control.
+  String? get _hfToken {
+    try {
+      final token = Platform.environment['HF_TOKEN'];
+      if (token != null && token.isNotEmpty) return token;
+    } catch (_) {}
+    return null;
+  }
 
   DownloadStatus _gemmaStatus = DownloadStatus.notDownloaded;
   DownloadStatus _miniLMStatus = DownloadStatus.notDownloaded;
@@ -148,9 +158,13 @@ class ModelDownloader extends ChangeNotifier {
         options: Options(
           receiveTimeout: const Duration(minutes: 60),
           sendTimeout: const Duration(minutes: 60),
-          headers: {
-            'Authorization': 'Bearer $HF_TOKEN',
-          },
+          headers: () {
+            final token = _hfToken;
+            if (token != null && token.isNotEmpty) {
+              return {'Authorization': 'Bearer $token'};
+            }
+            return <String, String>{};
+          }(),
         ),
       );
 
