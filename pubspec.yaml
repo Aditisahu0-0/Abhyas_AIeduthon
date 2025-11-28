@@ -1,0 +1,30 @@
+name: offline_learning_app_better
+description: Offline learning app with local RAG and SQLite
+version: 1.0.0
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.0.0
+  google_fonts: ^6.1.0
+  flutter_gemma: ^0.11.13
+  dio: ^5.0.0
+  path_provider: ^2.0.0
+  sqflite: ^2.3.0
+  path: ^1.8.3
+  flutter_markdown: ^0.6.14
+  shared_preferences: ^2.2.0
+  http: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/lessons/
