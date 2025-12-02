@@ -19,7 +19,7 @@ enum ModelType {
 class ModelDownloader extends ChangeNotifier {
   // Gemma 3 1B IT model - int4 quantized, optimized for mobile
   static const String GEMMA_MODEL_URL =
-      'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task';
+      'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task?download=true';
   static const String GEMMA_MODEL_FILENAME = 'model.task';
   static const int GEMMA_EXPECTED_SIZE_MB = 700;
   
@@ -29,16 +29,12 @@ class ModelDownloader extends ChangeNotifier {
   static const String MINILM_MODEL_FILENAME = 'minilm.tflite';
   static const int MINILM_EXPECTED_SIZE_MB = 25;
   
-  // Do NOT hard-code tokens. Provide the Hugging Face token via environment
-  // variables or secure storage. For development you can set the environment
-  // variable `HF_TOKEN`. On mobile, prefer a secure solution (flutter_dotenv
-  // or secure storage) and never commit tokens to source control.
+  // HuggingFace API token for downloading models
+  // Note: In production, consider using flutter_dotenv or secure storage
   String? get _hfToken {
-    try {
-      final token = Platform.environment['HF_TOKEN'];
-      if (token != null && token.isNotEmpty) return token;
-    } catch (_) {}
-    return null;
+    // Use your HuggingFace token
+    // TODO: Add your HuggingFace token here if required for gated models
+    return '';
   }
 
   DownloadStatus _gemmaStatus = DownloadStatus.notDownloaded;

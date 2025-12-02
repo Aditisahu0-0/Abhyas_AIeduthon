@@ -15,12 +15,13 @@ class ModelDownloadScreen extends StatelessWidget {
       ),
       body: Consumer<ModelDownloader>(
         builder: (context, downloader, child) {
-          return Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+          return SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                 const Icon(
                   Icons.psychology,
                   size: 100,
@@ -174,6 +175,7 @@ class ModelDownloadScreen extends StatelessWidget {
                 ],
               ],
             ),
+          ),
           );
         },
       ),

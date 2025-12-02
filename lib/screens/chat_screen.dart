@@ -1,4 +1,5 @@
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -50,7 +51,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       // Use streaming chat for all cases (includes fallback message if model not loaded)
-      await for (final token in aiService.chat(text)) {
+      await for (final token in aiService.chat(text).timeout(const Duration(seconds: 60))) {
         setState(() {
           fullResponse += token;
           _messages.last['content'] = fullResponse;
@@ -58,6 +59,11 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
       }
       setState(() {
+        _isTyping = false;
+      });
+    } on TimeoutException catch (_) {
+      setState(() {
+        _messages.last['content'] = "⚠️ Response timed out. The AI model is taking too long to respond. Please try again.";
         _isTyping = false;
       });
     } catch (e) {
@@ -90,6 +96,22 @@ class _ChatScreenState extends State<ChatScreen> {
         title: const Text('AI Tutor'),
         centerTitle: true,
         automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Clear Chat',
+            onPressed: () {
+              setState(() {
+                _messages.clear();
+                _messages.add({
+                  'role': 'assistant',
+                  'content': 'Chat cleared. Ask me anything about your subjects!'
+                });
+                _showWelcome = true;
+              });
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [

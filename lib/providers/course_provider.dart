@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/lesson.dart';
 import '../services/database_helper.dart';
 import '../services/ai_service.dart';
+import '../services/precomputed_rag_service.dart';
 
 class CourseProvider with ChangeNotifier {
   final DatabaseHelper _dbHelper = DatabaseHelper();
@@ -40,17 +41,11 @@ class CourseProvider with ChangeNotifier {
     
     print('📦 First launch: Importing courses from JSON files...');
     
+    // Only load the 3 files that actually exist
     final courseFiles = [
       'assets/lessons/class9_english.json',
-      'assets/lessons/class9_english_2.json',
-      'assets/lessons/class9_english_3.json',
-      'assets/lessons/class9_ict.json',
       'assets/lessons/class9_mathematics.json',
       'assets/lessons/class9_science.json',
-      'assets/lessons/class9_social_sicence.json',
-      'assets/lessons/class9_social_sicence_3.json',
-      'assets/lessons/class9_social_sicence_6.json',
-      'assets/lessons/class9_social_sicence_7.json',
     ];
     
     try {
@@ -102,49 +97,16 @@ class CourseProvider with ChangeNotifier {
     await _aiService.initialize();
     
     if (!_aiService.isModelLoaded) {
-      print('❌ AI model failed to load - cannot index content');
+      print('❌ AI model failed to load');
       return;
     }
     
     print('✅ Model loaded successfully!');
     
-    if (_aiService.vectorStore.documentCount > 50) {
-       print('✅ Content already indexed (${_aiService.vectorStore.documentCount} docs). Skipping full re-index.');
-       notifyListeners();
-       return;
-    }
+    // NEW: Initialize pre-computed RAG service (NO INDEXING NEEDED!)
+    print('=== Initializing Pre-computed RAG Service ===');
+    await PrecomputedRagService.instance.initialize();
     
-    print('=== Starting content indexing for RAG ===');
-    print('Total courses to index: ${_courses.length}');
-    
-    int totalTopics = 0;
-    for (var course in _courses) {
-      print('Indexing course: ${course.title}');
-      final lessons = await _dbHelper.getLessons(course.id);
-      
-      for (var lesson in lessons) {
-        final topics = await _dbHelper.getTopics(lesson.id);
-        
-        for (var topic in topics) {
-          await _aiService.indexContent(
-            topic.id, 
-            topic.content,
-            metadata: '${course.title} - ${lesson.title} - ${topic.title}',
-          );
-          totalTopics++;
-          
-          if (totalTopics % 5 == 0) {
-            await Future.delayed(Duration.zero);
-          }
-        }
-      }
-      await Future.delayed(Duration(milliseconds: 50));
-    }
-    
-    print('🔄 Computing TF-IDF vectors for all content...');
-    _aiService.vectorStore.recomputeTFIDF();
-    
-    print('✅ Indexing complete! Total topics indexed: $totalTopics');
     print('=== AI IS READY FOR USE ===');
     notifyListeners();
   }

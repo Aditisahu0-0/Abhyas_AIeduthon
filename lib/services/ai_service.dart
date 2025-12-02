@@ -1,21 +1,20 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:path_provider/path_provider.dart';
-import 'vector_store.dart';
-import 'embedding_service.dart';
 import 'database_helper.dart';
+import 'precomputed_rag_service.dart';
 
 class AIService {
   InferenceModel? _model;
-  final VectorStore _vectorStore = VectorStore();
-  final EmbeddingService _embeddingService = EmbeddingService();
   final DatabaseHelper _dbHelper = DatabaseHelper();
   bool _isModelLoaded = false;
+  dynamic _quizChatSession;
+  int _quizGenerationCount = 0;
 
   bool get isModelLoaded => _isModelLoaded;
-  VectorStore get vectorStore => _vectorStore;
 
   Future<void> initialize() async {
     if (_isModelLoaded) return;
@@ -49,25 +48,14 @@ class AIService {
       
       print('✅ Model installed successfully');
       
-      // Create model instance with GPU backend for phones
+      // Create model instance with CPU backend (Matching reference code for stability)
       _model = await FlutterGemma.getActiveModel(
-        maxTokens: 2048,  // Increased to 2048 to prevent OUT_OF_RANGE errors
-        preferredBackend: PreferredBackend.gpu,  // GPU for Android phones
+        maxTokens: 4096,  // Increased to 4096 to prevent "max sequence length" errors
+        preferredBackend: PreferredBackend.cpu,
       );
       
       _isModelLoaded = true;
-      print('✅ Gemma 3 1B model loaded successfully!');
-      
-      // Initialize embedding service (MiniLM)
-      print('Loading MiniLM embedding model...');
-      await _embeddingService.initialize();
-      
-      if (_embeddingService.isLoaded) {
-        _vectorStore.setEmbeddingService(_embeddingService);
-        print('✅ Hybrid search enabled (TF-IDF + Semantic)');
-      } else {
-        print('⚠️ MiniLM not loaded, using TF-IDF only');
-      }
+      print('✅ Gemma 3 1B model loaded successfully (CPU Backend)!');
       
       print('=== AI SERVICE INITIALIZATION COMPLETE ===');
     } catch (e) {
@@ -77,56 +65,49 @@ class AIService {
     }
   }
 
-  // RAG: Index content
-  Future<void> indexContent(String id, String content, {String? metadata}) async {
-    // Generate semantic embedding if available
-    List<double>? embedding;
-    if (_embeddingService.isLoaded) {
-      embedding = await _embeddingService.generateEmbedding(content);
-    }
-    
-    await _vectorStore.addDocument(id, content, metadata: metadata, embedding: embedding);
-  }
+
 
   // Chat with RAG
   Stream<String> chat(String query) async* {
     print('💬 Chat request: "$query"');
     print('   Model loaded: $_isModelLoaded');
-    print('   Vector store docs: ${_vectorStore.documentCount}');
     
     if (!_isModelLoaded || _model == null) {
-      yield "📚 **AI Model Not Available**\n\n";
-      yield "The offline AI model is not loaded.\n\n";
-      yield "Please download the model from the download screen first.\n\n";
-      yield "**In the meantime**, you can:\n";
-      yield "✅ Read all lesson content\n";
-      yield "✅ Take quizzes (rule-based)\n";
-      yield "✅ Get summaries (extractive)\n";
+      yield "📚 **AI Model Not Available**\\n\\n";
+      yield "The offline AI model is not loaded.\\n\\n";
+      yield "Please download the model from the download screen first.\\n\\n";
+      yield "**In the meantime**, you can:\\n";
+      yield "✅ Read all lesson content\\n";
+      yield "✅ Take quizzes (rule-based)\\n";
+      yield "✅ Get summaries (extractive)\\n";
       return;
     }
 
     // Check for "capabilities" query (simple rule-based response)
     if (query.toLowerCase().contains('what can you do') || 
         query.toLowerCase().contains('help')) {
-      yield "I can help you with:\n\n";
-      yield "✅ Explaining lesson topics\n";
-      yield "✅ Summarizing long texts\n";
-      yield "✅ Generating quizzes to test your knowledge\n";
-      yield "✅ Answering questions from your offline lessons\n";
+      yield "I can help you with:\\n\\n";
+      yield "✅ Explaining lesson topics\\n";
+      yield "✅ Summarizing long texts\\n";
+      yield "✅ Generating quizzes to test your knowledge\\n";
+      yield "✅ Answering questions from your offline lessons\\n";
       return;
     }
 
-    // RAG: Retrieve context (now uses hybrid search if available)
-    print('🔎 Searching vector store for relevant context...');
-    // Reduce limit to 2 to save tokens, preventing OUT_OF_RANGE errors
-    final relevantDocs = await _vectorStore.search(query, limit: 2);
-    final context = relevantDocs.join("\n\n");
+    // NEW: Use pre-computed RAG service for faster, semantic search
+    print('🔎 Searching pre-computed database for relevant context...');
+    final context = await PrecomputedRagService.instance.searchForContext(
+      query,
+      subjects: [], // Can be filtered by subjects if needed
+      limit: 2,
+    );
     
-    print('   Retrieved ${relevantDocs.length} documents');
     print('   Context length: ${context.length} chars');
 
-    final prompt = """You are a helpful tutor for students. Use the following context to answer the student's question.
-If the answer is not in the context, answer based on general knowledge but mention you're unsure.
+    final prompt = """You are a helpful and knowledgeable tutor.
+Use the provided context to answer the student's question clearly and concisely.
+The context may contain information from different subjects. Pay attention to the [Subject - Topic] headers.
+If the context doesn't have the answer, use your general knowledge to help.
 
 Context:
 $context
@@ -155,73 +136,105 @@ Tutor:
   }
 
 
-
-  Future<String> generateQuizJson(String topicContent, {String difficulty = 'medium', String? topicId}) async {
-    // Check cache first
-    if (topicId != null) {
-      final cached = await _dbHelper.getQuizCache(topicId, difficulty);
-      if (cached != null) {
-        print('📦 Using cached quiz for topic $topicId ($difficulty)');
-        return cached;
-      }
-    }
-    
+  Future<String> generateQuizJson(String topicContent, {String? topicId}) async {
     if (!_isModelLoaded || _model == null) {
-      final fallback = _generateFallbackQuiz(topicContent, difficulty: difficulty);
-      if (topicId != null) await _dbHelper.saveQuizCache(topicId, difficulty, fallback);
-      return fallback;
+      return _generateFallbackQuiz(topicContent);
     }
-
-    // Optimized prompt for speed and reliability
-    final prompt = """Context:
-$topicContent
-
-Task: Generate 3 multiple-choice questions based on the text above.
-Difficulty: $difficulty
-
-Output strictly in JSON format:
-{
-  "questions": [
-    {
-      "question": "Question text",
-      "options": ["Correct Answer", "Wrong 1", "Wrong 2", "Wrong 3"],
-      "correctIndex": 0,
-      "explanation": "Brief explanation"
-    }
-  ]
-}
-Ensure options are shuffled so correct answer is not always first. Do not add markdown.""";
 
     try {
-      final chat = await _model!.createChat();
-      await chat.addQueryChunk(Message.text(text: prompt, isUser: true));
+      // 1. Manage Session - ALWAYS create fresh session for quiz generation
+      _quizChatSession = null;
       
-      StringBuffer fullResponse = StringBuffer();
-      await for (final response in chat.generateChatResponseAsync()) {
-        if (response is TextResponse) fullResponse.write(response.token);
+      final model = await FlutterGemma.getActiveModel(
+        preferredBackend: PreferredBackend.cpu,
+        maxTokens: 4096,
+      );
+      _quizChatSession = await model.createChat();
+      _quizGenerationCount = 0;
+      print('🔄 Created fresh chat session for quiz generation');
+
+      // 2. Limit Content - STRICT limit to prevent token overflow
+      String limitedContent = topicContent;
+      if (topicContent.length > 600) {
+        final maxStart = topicContent.length - 600;
+        final start = Random().nextInt(maxStart);
+        limitedContent = topicContent.substring(start, start + 600);
+      }
+
+      // 3. Construct Prompt
+      final prompt = """Create 1 multiple-choice question based strictly on the text above.
+The question must have a clear, unambiguous answer in the text.
+Do not refer to "the text" or "the provided text" in the question itself.
+
+Format the output EXACTLY as follows (pipe-separated):
+Question|Correct Answer|Wrong Option 1|Wrong Option 2|Wrong Option 3
+
+Example:
+What is the capital of France?|Paris|London|Berlin|Madrid
+
+Text:
+$limitedContent
+
+Output:""";
+
+      // 4. Send to Model
+      print('📝 Generating quiz question...');
+      String fullResponse = "";
+      
+      await _quizChatSession!.addQueryChunk(Message.text(
+        text: prompt,
+        isUser: true,
+      ));
+
+      await for (final response in _quizChatSession!.generateChatResponseAsync()) {
+        if (response is TextResponse) {
+          fullResponse += response.token;
+        }
       }
       
-      String cleanJson = fullResponse.toString().trim()
-          .replaceAll('```json', '').replaceAll('```', '').trim();
-      
-      // Attempt to fix common JSON errors if any
-      if (!cleanJson.startsWith('{')) cleanJson = cleanJson.substring(cleanJson.indexOf('{'));
-      if (!cleanJson.endsWith('}')) cleanJson = cleanJson.substring(0, cleanJson.lastIndexOf('}') + 1);
+      print('✅ Raw Quiz Response: $fullResponse');
 
-      jsonDecode(cleanJson); // Validate
+      // 5. Parse Response
+      final parts = fullResponse.split('|').map((s) => s.trim()).toList();
       
-      if (topicId != null) await _dbHelper.saveQuizCache(topicId, difficulty, cleanJson);
-      return cleanJson;
+      if (parts.length >= 5) {
+        final question = parts[0];
+        final correct = parts[1];
+        final wrong1 = parts[2];
+        final wrong2 = parts[3];
+        final wrong3 = parts[4];
+        
+        final options = [correct, wrong1, wrong2, wrong3];
+        final correctOption = correct; 
+        options.shuffle();
+        
+        final correctIndex = options.indexOf(correctOption);
+        
+        final quizMap = {
+          "questions": [
+            {
+              "question": question,
+              "options": options,
+              "correctOptionIndex": correctIndex,
+              "explanation": "Correct answer: $correct"
+            }
+          ]
+        };
+        
+        return jsonEncode(quizMap);
+      } else {
+        throw Exception("Invalid format");
+      }
+
     } catch (e) {
-      print('Error generating quiz: $e');
-      final fallback = _generateFallbackQuiz(topicContent, difficulty: difficulty);
-      if (topicId != null) await _dbHelper.saveQuizCache(topicId, difficulty, fallback);
-      return fallback;
+      print('❌ Quiz Generation Error: $e');
+      return _generateFallbackQuiz(topicContent);
     }
   }
-  
-  String _generateFallbackQuiz(String content, {String difficulty = 'medium'}) {
-    final sentences = content.split('.').where((s) => s.trim().isNotEmpty).toList();
+
+  String _generateFallbackQuiz(String topicContent) {
+    print('⚠️ Using fallback quiz generation');
+    final sentences = topicContent.split(RegExp(r'(?<=[.!?])\s+'));
     
     // Shuffle sentences for variety each time
     sentences.shuffle();
@@ -245,7 +258,7 @@ Ensure options are shuffled so correct answer is not always first. Do not add ma
           "It is explained differently",
           "The topic does not cover this"
         ],
-        "correctIndex": 0,
+        "correctOptionIndex": 0,
         "explanation": "The correct answer is based on the content provided."
       });
       
@@ -261,7 +274,7 @@ Ensure options are shuffled so correct answer is not always first. Do not add ma
           "This is about a different subject",
           "None of the above"
         ],
-        "correctIndex": 0,
+        "correctOptionIndex": 0,
         "explanation": "Review the lesson content for accurate information."
       });
     }
@@ -343,7 +356,6 @@ Summary (as bullet points):""";
   void dispose() {
     _model?.close();
     _model = null;
-    _embeddingService.dispose();
     _isModelLoaded = false;
   }
 }

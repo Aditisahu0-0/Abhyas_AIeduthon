@@ -144,11 +144,13 @@ class QuizQuestion {
 
   factory QuizQuestion.fromMap(Map<String, dynamic> map) {
     return QuizQuestion(
-      id: map['id'],
-      question: map['question'],
-      options: (map['options'] as String).split('|'),
-      correctOptionIndex: map['correctOptionIndex'],
-      explanation: map['explanation'],
+      id: map['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      question: map['question'] ?? 'Unknown Question',
+      options: map['options'] is List 
+          ? List<String>.from(map['options'])
+          : (map['options'] as String?)?.split('|') ?? [],
+      correctOptionIndex: map['correctOptionIndex'] ?? 0,
+      explanation: map['explanation'] ?? '',
     );
   }
 }

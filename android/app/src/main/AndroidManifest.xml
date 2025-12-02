@@ -3,6 +3,7 @@
         android:label="offline_learning_app"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:largeHeap="true"
         android:extractNativeLibs="true">
         <activity
             android:name=".MainActivity"
