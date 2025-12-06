@@ -4,29 +4,41 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:path_provider/path_provider.dart';
+import 'tokenizer.dart';
 
 /// RAG Service using Pre-computed Embeddings Database
 /// 
 /// This service provides semantic search using pre-computed embeddings
-/// stored in knowledge_base.db. Uses keyword-based search for queries.
+/// stored in knowledge_base.db. Uses TFLite for on-device embedding generation.
 class PrecomputedRagService {
   static final PrecomputedRagService instance = PrecomputedRagService._();
   PrecomputedRagService._();
 
   Database? _db;
+  Interpreter? _interpreter;
+  WordPieceTokenizer? _tokenizer;
   bool _isInitialized = false;
+  String _textColumn = 'content'; // Default to old schema, updated in initialize
 
   bool get isInitialized => _isInitialized;
 
-  /// Initialize the service by loading the database
+  /// Initialize the service by loading the database and model
   Future<void> initialize() async {
     if (_isInitialized) return;
 
     try {
       print('=== PRECOMPUTED RAG INITIALIZATION START ===');
       
-      // Copy database from assets to app directory
+      // 1. Copy database from assets to app directory
       await _copyDatabaseFromAssets();
+      
+      // 2. Load Vocab
+      await _loadVocab();
+
+      // 3. Load TFLite Model
+      await _loadModel();
       
       _isInitialized = true;
       print('✅ Pre-computed RAG initialized successfully!');
@@ -43,7 +55,9 @@ class PrecomputedRagService {
       final dbPath = p.join(await getDatabasesPath(), 'knowledge_base.db');
       final dbFile = File(dbPath);
 
-      // Only copy if not exists or force update
+      // Only copy if not exists
+      // Note: In development, you might want to force update if asset changes.
+      // For now, we check existence.
       if (!await dbFile.exists()) {
         print('📦 Copying knowledge_base.db from assets...');
         final ByteData data = await rootBundle.load('assets/knowledge_base.db');
@@ -64,19 +78,83 @@ class PrecomputedRagService {
       final result = await _db!.rawQuery('SELECT COUNT(*) as count FROM knowledge_base');
       final count = result.first['count'];
       print('📊 Loaded database with $count topics');
+
+      // Check columns dynamically
+      final columns = await _db!.rawQuery('PRAGMA table_info(knowledge_base)');
+      final columnNames = columns.map((c) => c['name'].toString()).toSet();
+      print('📝 Database Columns: $columnNames');
+      
+      if (columnNames.contains('display_text')) {
+        _textColumn = 'display_text';
+      } else {
+        _textColumn = 'content';
+      }
+      print('✅ Using text column: $_textColumn');
     } catch (e) {
       print('❌ Error copying database: $e');
       rethrow;
     }
   }
 
+  /// Load vocab.txt from assets
+  Future<void> _loadVocab() async {
+    try {
+      print('📖 Loading vocab.txt...');
+      final vocabString = await rootBundle.loadString('assets/vocab.txt');
+      final lines = vocabString.split('\n');
+      final Map<String, int> vocabMap = {};
+      
+      for (int i = 0; i < lines.length; i++) {
+        final word = lines[i].trim();
+        if (word.isNotEmpty) {
+          vocabMap[word] = i;
+        }
+      }
+      
+      _tokenizer = WordPieceTokenizer(vocab: vocabMap);
+      print('✅ Vocab loaded with ${vocabMap.length} tokens');
+    } catch (e) {
+      print('❌ Error loading vocab: $e');
+      rethrow;
+    }
+  }
 
+  /// Load the TFLite model from assets
+  Future<void> _loadModel() async {
+    try {
+      print('🧠 Loading embedding model from assets...');
+      // Load directly from assets using tflite_flutter's ability to read assets
+      _interpreter = await Interpreter.fromAsset('assets/mobile_embedding.tflite');
+      print('✅ Embedding model loaded successfully');
+      
+      // Verify input/output shapes
+      // Input: [1, 256] (Token IDs)
+      // Output: [1, 384] (Embedding)
+    } catch (e) {
+      print('❌ Error loading embedding model: $e');
+      // If asset loading fails (sometimes issues on older plugins), try copying to file
+      print('⚠️ Retrying by copying model to file system...');
+      try {
+         final directory = await getApplicationDocumentsDirectory();
+         final modelPath = '${directory.path}/mobile_embedding.tflite';
+         final modelFile = File(modelPath);
+         
+         if (!await modelFile.exists()) {
+            final ByteData data = await rootBundle.load('assets/mobile_embedding.tflite');
+            final List<int> bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+            await modelFile.writeAsBytes(bytes, flush: true);
+         }
+         
+         _interpreter = await Interpreter.fromFile(modelFile);
+         print('✅ Embedding model loaded from file system');
+      } catch (retryError) {
+         print('❌ Retry failed: $retryError');
+      }
+    }
+  }
 
-  /// Search for relevant context using keyword matching
-  /// 
-  /// [query] - User's question
-  /// [subjects] - Optional list of subjects to filter by (e.g., ["English", "Science"])
-  /// [limit] - Maximum number of results to return
+  /// Search for relevant context using Vector Search (Cosine Similarity)
+  /// Falls back to Keyword Search if model is not loaded.
   Future<String> searchForContext(
     String query, {
     List<String> subjects = const [],
@@ -87,16 +165,164 @@ class PrecomputedRagService {
       return '';
     }
 
+    // 1. Try Vector Search
+    if (_interpreter != null && _tokenizer != null) {
+      try {
+        return await _vectorSearch(query, subjects: subjects, limit: limit);
+      } catch (e) {
+        print('⚠️ Vector search failed: $e');
+        print('Falling back to keyword search...');
+      }
+    }
+
+    // 2. Fallback to Keyword Search
+    return _keywordSearch(query, subjects: subjects, limit: limit);
+  }
+
+  /// Vector-based search
+  Future<String> _vectorSearch(
+    String query, {
+    List<String> subjects = const [],
+    int limit = 3,
+  }) async {
+    print('🔍 Performing Vector Search for: "$query"');
+    
+    // 1. Generate Embedding for Query
+    final queryEmbedding = await _generateEmbedding(query);
+    if (queryEmbedding == null) throw Exception("Failed to generate embedding");
+
+    // 2. Fetch all embeddings from DB (filtered by subject if needed)
+    String whereClause = '';
+    List<dynamic> whereArgs = [];
+    
+    if (subjects.isNotEmpty) {
+      final conditions = subjects.map((_) => 'metadata LIKE ?').join(' OR ');
+      whereClause = 'WHERE ($conditions)';
+      whereArgs.addAll(subjects.map((s) => '$s%'));
+    }
+
     try {
-      // Use keyword-based search directly
-      return _keywordSearch(query, subjects: subjects, limit: limit);
+      // Use dynamic text column
+      final rows = await _db!.rawQuery(
+        'SELECT id, $_textColumn, metadata, embedding FROM knowledge_base $whereClause',
+        whereArgs,
+      );
+
+      print('📊 Comparing against ${rows.length} documents...');
+      if (rows.isEmpty) {
+        print('⚠️ No documents found matching subjects: $subjects');
+        return '';
+      }
+      
+      // Check first row embedding size
+      if (rows.isNotEmpty) {
+         final firstBlob = rows.first['embedding'] as List<dynamic>; // might be List<int> or Blob
+         print('🔍 Sample embedding blob size: ${firstBlob.length}');
+      }
+
+      // 3. Calculate Cosine Similarity
+      List<Map<String, dynamic>> scoredResults = [];
+
+      for (var row in rows) {
+        final blob = row['embedding'] as List<int>;
+        final embedding = _blobToFloatList(Uint8List.fromList(blob));
+        
+        // Debug: check embedding size
+        if (embedding.length != queryEmbedding.length) {
+          print('⚠️ Mismatch embedding size: DB=${embedding.length} vs Query=${queryEmbedding.length}');
+          continue;
+        }
+
+        final score = _cosineSimilarity(queryEmbedding, embedding);
+        
+        scoredResults.add({
+          'row': row,
+          'score': score,
+        });
+      }
+
+      // 4. Sort by Score (Descending)
+      scoredResults.sort((a, b) => (b['score'] as double).compareTo(a['score'] as double));
+
+      // 5. Take Top K
+      final topResults = scoredResults.take(limit).toList();
+      
+      print('✅ Top results scores: ${topResults.map((r) => (r['score'] as double).toStringAsFixed(4)).toList()}');
+      
+      if (topResults.isEmpty) return '';
+
+      return topResults.map((r) {
+        final row = r['row'];
+        final metadata = row['metadata'] as String;
+        final text = row[_textColumn].toString();
+        return "[$metadata]\n$text";
+      }).join('\n\n---\n\n');
+      
     } catch (e) {
-      print('Error searching: $e');
-      return '';
+      print('❌ Error in Vector Search DB Query: $e');
+      rethrow;
     }
   }
 
-  /// Keyword-based search through content
+  /// Generate embedding using TFLite model and Tokenizer
+  Future<List<double>?> _generateEmbedding(String text) async {
+    if (_interpreter == null || _tokenizer == null) return null;
+
+    try {
+      // 1. Tokenize
+      final inputIds = _tokenizer!.tokenize(text);
+      // Create empty Int32List of size [1, 256]
+      // Use Int32List for inputs if model expects int32 (MiniLM usually does)
+      final inputIdsTensor = Int32List.fromList(inputIds).reshape([1, 256]);
+      final inputMaskTensor = Int32List.fromList(List.filled(256, 1)).reshape([1, 256]);
+      // Mask 0s for padding if any
+      for(int i=0; i<inputIds.length; i++) {
+        if(inputIds[i] == 0) (inputMaskTensor as dynamic)[0][i] = 0; 
+      }
+      final segmentIdsTensor = Int32List.fromList(List.filled(256, 0)).reshape([1, 256]); 
+      
+      // Output: [1, 384]
+      // Use Float32List for output
+      var output = Float32List(1 * 384).reshape([1, 384]);
+      
+      // Run inference
+      _interpreter!.runForMultipleInputs(
+        [inputIdsTensor, inputMaskTensor, segmentIdsTensor], 
+        {0: output}
+      );
+      
+      final result = List<double>.from(output[0]);
+      // DEBUG: print('Generated embedding: ${result.take(5).toList()}...');
+      return result;
+    } catch (e) {
+      print('Error generating embedding: $e');
+      print('Tokenizer vocab size: ${_tokenizer?.vocab.length}');
+      return null;
+    }
+  }
+
+  List<double> _blobToFloatList(Uint8List blob) {
+    final buffer = blob.buffer;
+    final floatList = Float32List.view(buffer);
+    return List<double>.from(floatList);
+  }
+
+  double _cosineSimilarity(List<double> a, List<double> b) {
+    double dotProduct = 0.0;
+    double normA = 0.0;
+    double normB = 0.0;
+
+    for (int i = 0; i < a.length; i++) {
+      dotProduct += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
+    }
+
+    if (normA == 0 || normB == 0) return 0.0;
+    return dotProduct / (sqrt(normA) * sqrt(normB));
+  }
+
+  /// Keyword-based search through content (Fallback)
   Future<String> _keywordSearch(
     String query, {
     List<String> subjects = const [],
@@ -116,28 +342,25 @@ class PrecomputedRagService {
       if (keywords.isEmpty) return '';
 
       // 2. Build dynamic WHERE clause
-      // STRATEGY: First try to find rows containing ALL keywords (AND logic) for high precision.
-      // If that returns too few results, fallback to ANY keyword (OR logic).
-
       String whereClauseAnd = 'WHERE (';
       List<dynamic> whereArgsAnd = [];
       
       for (int i = 0; i < keywords.length; i++) {
         if (i > 0) whereClauseAnd += ' AND ';
-        whereClauseAnd += 'content LIKE ?';
+        whereClauseAnd += '$_textColumn LIKE ?';
         whereArgsAnd.add('%${keywords[i]}%');
       }
       whereClauseAnd += ')';
       
       if (subjects.isNotEmpty) {
-        final placeholders = List.filled(subjects.length, '?').join(',');
-        whereClauseAnd += ' AND subject IN ($placeholders)';
-        whereArgsAnd.addAll(subjects);
+        final conditions = subjects.map((_) => 'metadata LIKE ?').join(' OR ');
+        whereClauseAnd += ' AND ($conditions)';
+        whereArgsAnd.addAll(subjects.map((s) => '$s%'));
       }
 
       // Try AND search first
       var rows = await _db!.rawQuery(
-        'SELECT display_text, subject, topic FROM knowledge_base $whereClauseAnd LIMIT $limit',
+        'SELECT $_textColumn, metadata FROM knowledge_base $whereClauseAnd LIMIT $limit',
         whereArgsAnd,
       );
 
@@ -148,46 +371,40 @@ class PrecomputedRagService {
         
         for (int i = 0; i < keywords.length; i++) {
           if (i > 0) whereClauseOr += ' OR ';
-          whereClauseOr += 'content LIKE ?';
+          whereClauseOr += '$_textColumn LIKE ?';
           whereArgsOr.add('%${keywords[i]}%');
         }
         whereClauseOr += ')';
         
-        // Exclude already found rows to avoid duplicates? 
-        // For simplicity, just run the OR query and deduplicate in Dart if needed, 
-        // or just accept that OR might return the same ones (which is fine, we can Set them).
-        
         if (subjects.isNotEmpty) {
-          final placeholders = List.filled(subjects.length, '?').join(',');
-          whereClauseOr += ' AND subject IN ($placeholders)';
-          whereArgsOr.addAll(subjects);
+          final conditions = subjects.map((_) => 'metadata LIKE ?').join(' OR ');
+          whereClauseOr += ' AND ($conditions)';
+          whereArgsOr.addAll(subjects.map((s) => '$s%'));
         }
 
         final rowsOr = await _db!.rawQuery(
-          'SELECT display_text, subject, topic FROM knowledge_base $whereClauseOr LIMIT $limit',
+          'SELECT $_textColumn, metadata FROM knowledge_base $whereClauseOr LIMIT $limit',
           whereArgsOr,
         );
         
-        // Merge results, prioritizing AND results
-        // Use a Set of display_text to avoid duplicates
-        final seen = rows.map((r) => r['display_text'].toString()).toSet();
+        // Merge results
+        final seen = rows.map((r) => r[_textColumn].toString()).toSet();
         final combined = List<Map<String, Object?>>.from(rows);
         
         for (var row in rowsOr) {
           if (combined.length >= limit) break;
-          if (!seen.contains(row['display_text'].toString())) {
+          if (!seen.contains(row[_textColumn].toString())) {
             combined.add(row);
-            seen.add(row['display_text'].toString());
+            seen.add(row[_textColumn].toString());
           }
         }
         rows = combined;
       }
       
       return rows.map((row) {
-        final subject = row['subject'] ?? 'General';
-        final topic = row['topic'] ?? 'Unknown';
-        final text = row['display_text'].toString();
-        return "[$subject - $topic]\n$text";
+        final metadata = row['metadata'] as String;
+        final text = row[_textColumn].toString();
+        return "[$metadata]\n$text";
       }).join('\n\n---\n\n');
     } catch (e) {
       print('Error in fallback search: $e');
@@ -247,6 +464,8 @@ class PrecomputedRagService {
   void dispose() {
     _db?.close();
     _db = null;
+    _interpreter?.close();
+    _interpreter = null;
     _isInitialized = false;
   }
 }

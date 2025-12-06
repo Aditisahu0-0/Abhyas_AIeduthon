@@ -95,6 +95,11 @@ class AppTheme {
           fontWeight: FontWeight.w600,
           color: darkTextPrimary,
         ),
+        headlineSmall: GoogleFonts.poppins(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: darkTextPrimary,
+        ),
         titleLarge: GoogleFonts.poppins(
           fontSize: 18,
           fontWeight: FontWeight.w600,
@@ -231,6 +236,11 @@ class AppTheme {
         headlineMedium: GoogleFonts.poppins(
           fontSize: 20,
           fontWeight: FontWeight.w600,
+          color: lightTextPrimary,
+        ),
+        headlineSmall: GoogleFonts.poppins(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
           color: lightTextPrimary,
         ),
         titleLarge: GoogleFonts.poppins(

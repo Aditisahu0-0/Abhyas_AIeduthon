@@ -18,6 +18,8 @@ class LessonScreen extends StatefulWidget {
 }
 
 class _LessonScreenState extends State<LessonScreen> {
+  int _currentPageIndex = 0;
+
   @override
   void initState() {
     super.initState();
@@ -154,6 +156,11 @@ class _LessonScreenState extends State<LessonScreen> {
               Expanded(
                 child: PageView.builder(
                   itemCount: provider.currentTopics.length,
+                  onPageChanged: (index) {
+                    setState(() {
+                      _currentPageIndex = index;
+                    });
+                  },
                   itemBuilder: (context, index) {
                     final topic = provider.currentTopics[index];
                     return SingleChildScrollView(
@@ -262,8 +269,9 @@ class _LessonScreenState extends State<LessonScreen> {
     );
 
     try {
-      // Summarize the first topic for now
-      final summary = await provider.aiService.summarize(topics.first.content);
+      // Summarize the current topic
+      final currentTopic = topics[_currentPageIndex];
+      final summary = await provider.aiService.summarize(currentTopic.content);
       
       if (context.mounted) {
         Navigator.pop(context); // Pop loading
@@ -297,10 +305,17 @@ class _LessonScreenState extends State<LessonScreen> {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Text(
-                      'Quick Revision',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: Text(
+                        'Quick Revision: ${currentTopic.title}',
+                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 20,
+                          color: Theme.of(context).brightness == Brightness.dark 
+                              ? Colors.white 
+                              : Colors.black87,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -310,7 +325,9 @@ class _LessonScreenState extends State<LessonScreen> {
                   child: SingleChildScrollView(
                     child: MarkdownBody(
                       data: summary,
-                      styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)),
+                      styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                        p: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.5),
+                      ),
                     ),
                   ),
                 ),

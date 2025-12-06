@@ -166,6 +166,10 @@ class ModelDownloadScreen extends StatelessWidget {
                     child: const Text('Download AI Model', style: TextStyle(fontSize: 16)),
                   ),
                   const SizedBox(height: 12),
+                  
+
+
+                  const SizedBox(height: 12),
                   TextButton(
                     onPressed: () {
                       Navigator.of(context).pushReplacementNamed('/');

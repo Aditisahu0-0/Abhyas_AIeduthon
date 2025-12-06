@@ -20,7 +20,7 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'offline_learning.db');
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -43,6 +43,18 @@ class DatabaseHelper {
           )
         ''');
       }
+    }
+    
+    if (oldVersion < 3) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS quiz_progress(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lesson_id TEXT,
+          score INTEGER,
+          total_questions INTEGER,
+          timestamp INTEGER
+        )
+      ''');
     }
   }
 
@@ -78,13 +90,23 @@ class DatabaseHelper {
       )
     ''');
     
-    await db.execute('''
+await db.execute('''
       CREATE TABLE quiz_cache(
         topic_id TEXT,
         difficulty TEXT,
         quiz_json TEXT,
         created_at INTEGER,
         PRIMARY KEY (topic_id, difficulty)
+      )
+    ''');
+    
+    await db.execute('''
+      CREATE TABLE quiz_progress(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lesson_id TEXT,
+        score INTEGER,
+        total_questions INTEGER,
+        timestamp INTEGER
       )
     ''');
   }
@@ -237,5 +259,48 @@ class DatabaseHelper {
     }
     
     return cached['quiz_json'] as String;
+  }
+  
+  // Quiz Progress Methods
+  Future<void> saveQuizAttempt(String lessonId, int score, int totalQuestions) async {
+    final db = await database;
+    await db.insert(
+      'quiz_progress',
+      {
+        'lesson_id': lessonId,
+        'score': score,
+        'total_questions': totalQuestions,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+  
+  Future<List<Map<String, dynamic>>> getQuizHistory(String lessonId, {int limit = 10}) async {
+    final db = await database;
+    return await db.query(
+      'quiz_progress',
+      where: 'lesson_id = ?',
+      whereArgs: [lessonId],
+      orderBy: 'timestamp DESC',
+      limit: limit,
+    );
+  }
+  
+  Future<Map<String, dynamic>> getQuizStats(String lessonId) async {
+    final db = await database;
+    final result = await db.rawQuery('''
+      SELECT 
+        COUNT(*) as total_attempts,
+        AVG(CAST(score AS REAL) / CAST(total_questions AS REAL) * 100) as average_percentage,
+        MAX(CAST(score AS REAL) / CAST(total_questions AS REAL) * 100) as best_percentage
+      FROM quiz_progress
+      WHERE lesson_id = ?
+    ''', [lessonId]);
+    
+    if (result.isEmpty) {
+      return {'total_attempts': 0, 'average_percentage': 0.0, 'best_percentage': 0.0};
+    }
+    
+    return result.first;
   }
 }

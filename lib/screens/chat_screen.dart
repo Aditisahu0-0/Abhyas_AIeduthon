@@ -19,6 +19,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isTyping = false;
   final ScrollController _scrollController = ScrollController();
   bool _showWelcome = true;
+  String? _selectedSubject; // Null means "All Subjects"
 
   @override
   void initState() {
@@ -51,7 +52,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       // Use streaming chat for all cases (includes fallback message if model not loaded)
-      await for (final token in aiService.chat(text).timeout(const Duration(seconds: 60))) {
+      await for (final token in aiService.chat(text, subject: _selectedSubject).timeout(const Duration(seconds: 60))) {
         setState(() {
           fullResponse += token;
           _messages.last['content'] = fullResponse;
@@ -93,19 +94,65 @@ class _ChatScreenState extends State<ChatScreen> {
     
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AI Tutor'),
+        title: Consumer<CourseProvider>(
+          builder: (context, provider, child) {
+            final subjects = ['All Subjects', ...provider.courses.map((c) => c.title)];
+            
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: isDark ? AppTheme.darkCard : Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isDark ? Colors.white10 : Colors.grey.shade300,
+                ),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedSubject ?? 'All Subjects',
+                  icon: const Icon(Icons.arrow_drop_down_rounded),
+                  isDense: true,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                  ),
+                  dropdownColor: isDark ? AppTheme.darkCard : Colors.white,
+                  items: subjects.map((String subject) {
+                    return DropdownMenuItem<String>(
+                      value: subject,
+                      child: Text(
+                        subject,
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (String? newValue) {
+                    setState(() {
+                      _selectedSubject = newValue == 'All Subjects' ? null : newValue;
+                    });
+                  },
+                ),
+              ),
+            );
+          },
+        ),
         centerTitle: true,
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
-            tooltip: 'Clear Chat',
-            onPressed: () {
+            tooltip: 'Clear Chat & Refresh Memory',
+            onPressed: () async {
+              final provider = Provider.of<CourseProvider>(context, listen: false);
+              await provider.aiService.clearChatSession();
+              
               setState(() {
                 _messages.clear();
                 _messages.add({
                   'role': 'assistant',
-                  'content': 'Chat cleared. Ask me anything about your subjects!'
+                  'content': 'Chat cleared and memory refreshed! Ask me anything!'
                 });
                 _showWelcome = true;
               });

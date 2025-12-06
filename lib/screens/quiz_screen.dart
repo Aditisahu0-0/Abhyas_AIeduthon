@@ -53,7 +53,7 @@ class _QuizScreenState extends State<QuizScreen> {
       final jsonStr = await provider.aiService.generateQuizJson(
         topic.content, 
         topicId: topic.id,
-      ).timeout(const Duration(seconds: 60)); // 60s timeout for single question
+      ).timeout(const Duration(seconds: 60));
 
       final data = jsonDecode(jsonStr);
       final List<dynamic> qList = data['questions'];
@@ -67,7 +67,6 @@ class _QuizScreenState extends State<QuizScreen> {
       }
     } catch (e) {
       print("❌ Quiz Error: $e");
-      // Fallback mock question if AI fails
       setState(() {
         _currentQuestion = QuizQuestion(
           id: 'mock',
@@ -94,6 +93,97 @@ class _QuizScreenState extends State<QuizScreen> {
     });
   }
 
+  Future<void> _showResultsDialog() async {
+    if (_questionsAnswered == 0) {
+      Navigator.pop(context);
+      return;
+    }
+
+    final provider = Provider.of<CourseProvider>(context, listen: false);
+    
+    // Save quiz attempt to database
+    await provider.dbHelper.saveQuizAttempt(
+      widget.lessonId,
+      _score,
+      _questionsAnswered,
+    );
+
+    final percentage = (_score / _questionsAnswered * 100).round();
+    String message;
+    IconData icon;
+    Color color;
+
+    if (percentage >= 80) {
+      message = 'Excellent work! Keep it up! 🌟';
+      icon = Icons.emoji_events;
+      color = Colors.amber;
+    } else if (percentage >= 60) {
+      message = 'Good job! Practice makes perfect! 👍';
+      icon = Icons.thumb_up;
+      color = Colors.green;
+    } else if (percentage >= 40) {
+      message = 'Keep trying! You\'re getting there! 💪';
+      icon = Icons.trending_up;
+      color = Colors.orange;
+    } else {
+      message = 'Don\'t give up! Review and try again! 📚';
+      icon = Icons.school;
+      color = Colors.blue;
+    }
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Column(
+          children: [
+            Icon(icon, size: 64, color: color),
+            const SizedBox(height: 16),
+            const Text('Quiz Complete!'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '$_score / $_questionsAnswered',
+              style: TextStyle(
+                fontSize: 48,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+            Text(
+              '$percentage%',
+              style: TextStyle(
+                fontSize: 24,
+                color: color,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context); // Close dialog
+              Navigator.pop(context); // Close quiz screen
+            },
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -103,7 +193,7 @@ class _QuizScreenState extends State<QuizScreen> {
         title: Text('Quiz Practice ($_questionsAnswered Done)'),
         actions: [
           TextButton.icon(
-            onPressed: () => Navigator.pop(context),
+            onPressed: _showResultsDialog,
             icon: const Icon(Icons.exit_to_app),
             label: const Text('Exit'),
           ),

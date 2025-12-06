@@ -25,6 +25,7 @@ class CourseProvider with ChangeNotifier {
   List<Topic> get currentTopics => _currentTopics;
   bool get isLoading => _isLoading;
   AIService get aiService => _aiService;
+  DatabaseHelper get dbHelper => _dbHelper;
 
   Future<void> loadCourses() async {
     _isLoading = true;
