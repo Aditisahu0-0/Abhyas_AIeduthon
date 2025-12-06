@@ -1,5 +1,5 @@
 name: offline_learning_app_better
-description: Offline learning app with local RAG and SQLite
+description: Abhyas - AI-Powered Offline Learning with local RAG
 version: 1.0.0
 
 environment:
@@ -24,6 +24,21 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.3.0
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  image_path: "assets/logo.png"
+  min_sdk_android: 21
+
+flutter_native_splash:
+  color: "#ffffff"
+  image: "assets/logo.png"
+  android_12:
+    image: "assets/logo.png"
+    color: "#ffffff"
 
 flutter:
   uses-material-design: true
@@ -32,3 +47,4 @@ flutter:
     - assets/knowledge_base.db
     - assets/mobile_embedding.tflite
     - assets/vocab.txt
+    - assets/logo.png

@@ -20,7 +20,9 @@ class PrecomputedRagService {
   Interpreter? _interpreter;
   WordPieceTokenizer? _tokenizer;
   bool _isInitialized = false;
-  String _textColumn = 'content'; // Default to old schema, updated in initialize
+  String _textColumn = 'content'; 
+  bool _hasMetadata = false;
+  int _inputCount = 3; 
 
   bool get isInitialized => _isInitialized;
 
@@ -56,8 +58,6 @@ class PrecomputedRagService {
       final dbFile = File(dbPath);
 
       // Only copy if not exists
-      // Note: In development, you might want to force update if asset changes.
-      // For now, we check existence.
       if (!await dbFile.exists()) {
         print('📦 Copying knowledge_base.db from assets...');
         final ByteData data = await rootBundle.load('assets/knowledge_base.db');
@@ -89,7 +89,12 @@ class PrecomputedRagService {
       } else {
         _textColumn = 'content';
       }
+      
+      _hasMetadata = columnNames.contains('metadata');
+      
       print('✅ Using text column: $_textColumn');
+      print('✅ Has metadata column: $_hasMetadata');
+
     } catch (e) {
       print('❌ Error copying database: $e');
       rethrow;
@@ -123,30 +128,33 @@ class PrecomputedRagService {
   Future<void> _loadModel() async {
     try {
       print('🧠 Loading embedding model from assets...');
-      // Load directly from assets using tflite_flutter's ability to read assets
-      _interpreter = await Interpreter.fromAsset('assets/mobile_embedding.tflite');
-      print('✅ Embedding model loaded successfully');
       
-      // Verify input/output shapes
-      // Input: [1, 256] (Token IDs)
-      // Output: [1, 384] (Embedding)
+      // Check if it exists in assets first (via rootBundle for copying fallback)
+      // But tflite_flutter prefers direct asset path or file path
+      
+      // Try loading from file system first (in case we copied it previously or need to)
+      final directory = await getApplicationDocumentsDirectory();
+      final modelFile = File(p.join(directory.path, "mobile_embedding.tflite"));
+      
+      if (!await modelFile.exists()) {
+          print('📦 Copying mobile_embedding.tflite from assets...');
+          final ByteData data = await rootBundle.load('assets/mobile_embedding.tflite');
+          final List<int> bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+          await modelFile.writeAsBytes(bytes, flush: true);
+      }
+      
+      _interpreter = await Interpreter.fromFile(modelFile);
+      
+      _inputCount = _interpreter!.getInputTensors().length;
+      print('✅ Embedding model loaded. Expecting $_inputCount inputs.');
+      
     } catch (e) {
       print('❌ Error loading embedding model: $e');
-      // If asset loading fails (sometimes issues on older plugins), try copying to file
-      print('⚠️ Retrying by copying model to file system...');
+      print('⚠️ Retrying with direct asset load...');
       try {
-         final directory = await getApplicationDocumentsDirectory();
-         final modelPath = '${directory.path}/mobile_embedding.tflite';
-         final modelFile = File(modelPath);
-         
-         if (!await modelFile.exists()) {
-            final ByteData data = await rootBundle.load('assets/mobile_embedding.tflite');
-            final List<int> bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-            await modelFile.writeAsBytes(bytes, flush: true);
-         }
-         
-         _interpreter = await Interpreter.fromFile(modelFile);
-         print('✅ Embedding model loaded from file system');
+         _interpreter = await Interpreter.fromAsset('assets/mobile_embedding.tflite');
+         _inputCount = _interpreter!.getInputTensors().length;
+         print('✅ Embedding model loaded from asset. Input count: $_inputCount');
       } catch (retryError) {
          print('❌ Retry failed: $retryError');
       }
@@ -160,10 +168,12 @@ class PrecomputedRagService {
     List<String> subjects = const [],
     int limit = 3,
   }) async {
+    print('🔍 RAG: searchForContext called for query: "$query"');
     if (_db == null) {
-      print('❌ Database not initialized');
+      print('❌ RAG: Database not initialized (db is null)');
       return '';
     }
+    print('🔍 RAG: Interpreter: ${_interpreter != null ? "OK" : "NULL"}, Tokenizer: ${_tokenizer != null ? "OK" : "NULL"}');
 
     // 1. Try Vector Search
     if (_interpreter != null && _tokenizer != null) {
@@ -171,8 +181,11 @@ class PrecomputedRagService {
         return await _vectorSearch(query, subjects: subjects, limit: limit);
       } catch (e) {
         print('⚠️ Vector search failed: $e');
+        print('stacktrace: ${StackTrace.current}');
         print('Falling back to keyword search...');
       }
+    } else {
+       print('⚠️ RAG: Skipping Vector Search because Interpreter or Tokenizer is NULL');
     }
 
     // 2. Fallback to Keyword Search
@@ -189,7 +202,11 @@ class PrecomputedRagService {
     
     // 1. Generate Embedding for Query
     final queryEmbedding = await _generateEmbedding(query);
-    if (queryEmbedding == null) throw Exception("Failed to generate embedding");
+    if (queryEmbedding == null) {
+      print('❌ RAG: Failed to generate query embedding (returned null)');
+      throw Exception("Failed to generate embedding");
+    }
+    print('✅ RAG: Query embedding generated. Length: ${queryEmbedding.length}');
 
     // 2. Fetch all embeddings from DB (filtered by subject if needed)
     String whereClause = '';
@@ -203,8 +220,10 @@ class PrecomputedRagService {
 
     try {
       // Use dynamic text column
+      final selectColumns = _hasMetadata ? 'id, $_textColumn, metadata, embedding' : 'id, $_textColumn, embedding';
+      
       final rows = await _db!.rawQuery(
-        'SELECT id, $_textColumn, metadata, embedding FROM knowledge_base $whereClause',
+        'SELECT $selectColumns FROM knowledge_base $whereClause',
         whereArgs,
       );
 
@@ -229,7 +248,7 @@ class PrecomputedRagService {
         
         // Debug: check embedding size
         if (embedding.length != queryEmbedding.length) {
-          print('⚠️ Mismatch embedding size: DB=${embedding.length} vs Query=${queryEmbedding.length}');
+          // print('⚠️ Mismatch embedding size: DB=${embedding.length} vs Query=${queryEmbedding.length}');
           continue;
         }
 
@@ -253,7 +272,7 @@ class PrecomputedRagService {
 
       return topResults.map((r) {
         final row = r['row'];
-        final metadata = row['metadata'] as String;
+        final metadata = _hasMetadata ? (row['metadata'] as String? ?? 'Info') : 'Info';
         final text = row[_textColumn].toString();
         return "[$metadata]\n$text";
       }).join('\n\n---\n\n');
@@ -271,32 +290,39 @@ class PrecomputedRagService {
     try {
       // 1. Tokenize
       final inputIds = _tokenizer!.tokenize(text);
-      // Create empty Int32List of size [1, 256]
-      // Use Int32List for inputs if model expects int32 (MiniLM usually does)
+      
+      // 2. Prepare Tensors (Batch size 1, Sequence length 256)
       final inputIdsTensor = Int32List.fromList(inputIds).reshape([1, 256]);
       final inputMaskTensor = Int32List.fromList(List.filled(256, 1)).reshape([1, 256]);
-      // Mask 0s for padding if any
+      
+      // Mask padding tokens (0)
       for(int i=0; i<inputIds.length; i++) {
         if(inputIds[i] == 0) (inputMaskTensor as dynamic)[0][i] = 0; 
       }
-      final segmentIdsTensor = Int32List.fromList(List.filled(256, 0)).reshape([1, 256]); 
       
       // Output: [1, 384]
-      // Use Float32List for output
       var output = Float32List(1 * 384).reshape([1, 384]);
       
-      // Run inference
-      _interpreter!.runForMultipleInputs(
-        [inputIdsTensor, inputMaskTensor, segmentIdsTensor], 
-        {0: output}
-      );
-      
+      // 3. Run Inference based on Input Count
+      if(_inputCount == 2) {
+          // Model expects [input_ids, attention_mask]
+          _interpreter!.runForMultipleInputs(
+            [inputIdsTensor, inputMaskTensor], 
+            {0: output}
+          );
+      } else {
+          // Model expects [input_ids, attention_mask, token_type_ids]
+          final segmentIdsTensor = Int32List.fromList(List.filled(256, 0)).reshape([1, 256]); 
+          _interpreter!.runForMultipleInputs(
+            [inputIdsTensor, inputMaskTensor, segmentIdsTensor], 
+            {0: output}
+          );
+      }
+
       final result = List<double>.from(output[0]);
-      // DEBUG: print('Generated embedding: ${result.take(5).toList()}...');
       return result;
     } catch (e) {
-      print('Error generating embedding: $e');
-      print('Tokenizer vocab size: ${_tokenizer?.vocab.length}');
+      print('❌ RAG: Error generating embedding: $e');
       return null;
     }
   }
@@ -359,8 +385,10 @@ class PrecomputedRagService {
       }
 
       // Try AND search first
+      final selectColumns = _hasMetadata ? '$_textColumn, metadata' : '$_textColumn';
+      
       var rows = await _db!.rawQuery(
-        'SELECT $_textColumn, metadata FROM knowledge_base $whereClauseAnd LIMIT $limit',
+        'SELECT $selectColumns FROM knowledge_base $whereClauseAnd LIMIT $limit',
         whereArgsAnd,
       );
 
@@ -383,7 +411,7 @@ class PrecomputedRagService {
         }
 
         final rowsOr = await _db!.rawQuery(
-          'SELECT $_textColumn, metadata FROM knowledge_base $whereClauseOr LIMIT $limit',
+          'SELECT $selectColumns FROM knowledge_base $whereClauseOr LIMIT $limit',
           whereArgsOr,
         );
         
@@ -402,7 +430,7 @@ class PrecomputedRagService {
       }
       
       return rows.map((row) {
-        final metadata = row['metadata'] as String;
+        final metadata = _hasMetadata ? (row['metadata'] as String? ?? 'Info') : 'Info';
         final text = row[_textColumn].toString();
         return "[$metadata]\n$text";
       }).join('\n\n---\n\n');
@@ -422,13 +450,13 @@ class PrecomputedRagService {
 
     try {
       final rows = await _db!.rawQuery(
-        'SELECT content, topic_title FROM knowledge_base WHERE chapter_title = ? AND subject = ? ORDER BY RANDOM() LIMIT 1',
+        'SELECT $_textColumn, topic_title FROM knowledge_base WHERE chapter_title = ? AND subject = ? ORDER BY RANDOM() LIMIT 1',
         [chapterTitle, subject],
       );
       
       if (rows.isEmpty) return '';
       
-      final content = rows.first['content'].toString();
+      final content = rows.first[_textColumn].toString();
       final topicTitle = rows.first['topic_title'].toString();
       
       // Truncate if too long
