@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -39,10 +38,25 @@ class _LessonScreenState extends State<LessonScreen> {
             icon: const Icon(Icons.quiz_rounded),
             tooltip: 'Take Quiz',
             onPressed: () {
+              // Pass current topic content to quiz
+              final provider = Provider.of<CourseProvider>(context, listen: false);
+              String? content;
+              String? topicId;
+              
+              if (provider.currentTopics.isNotEmpty) {
+                 final topic = provider.currentTopics[_currentPageIndex];
+                 content = topic.content;
+                 topicId = topic.id;
+              }
+
                Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => QuizScreen(lessonId: widget.lesson.id),
+                  builder: (context) => QuizScreen(
+                    lessonId: widget.lesson.id,
+                    initialContent: content,
+                    initialTopicId: topicId,
+                  ),
                 ),
               );
             },
@@ -226,10 +240,17 @@ class _LessonScreenState extends State<LessonScreen> {
                   ),
                   child: ElevatedButton(
                     onPressed: () {
+                       // Pass current topic content to quiz
+                      final topic = provider.currentTopics[_currentPageIndex];
+                      
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => QuizScreen(lessonId: widget.lesson.id),
+                          builder: (context) => QuizScreen(
+                            lessonId: widget.lesson.id,
+                            initialContent: topic.content,
+                            initialTopicId: topic.id,
+                          ),
                         ),
                       );
                     },

@@ -3,17 +3,9 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
 
-enum DownloadStatus {
-  notDownloaded,
-  downloading,
-  downloaded,
-  error,
-  cancelled
-}
+enum DownloadStatus { notDownloaded, downloading, downloaded, error, cancelled }
 
-enum ModelType {
-  gemma
-}
+enum ModelType { gemma }
 
 class ModelDownloader extends ChangeNotifier {
   // Gemma 3 1B IT model - int4 quantized, optimized for mobile
@@ -21,7 +13,7 @@ class ModelDownloader extends ChangeNotifier {
       'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task?download=true';
   static const String GEMMA_MODEL_FILENAME = 'model.task';
   static const int GEMMA_EXPECTED_SIZE_MB = 700;
-  
+
   // HuggingFace API token for downloading models
   String? get _hfToken {
     return '';
@@ -38,7 +30,7 @@ class ModelDownloader extends ChangeNotifier {
   String? get gemmaError => _gemmaError;
   bool get isGemmaDownloading => _gemmaStatus == DownloadStatus.downloading;
   bool get isGemmaDownloaded => _gemmaStatus == DownloadStatus.downloaded;
-  
+
   // Legacy compatibility
   DownloadStatus get status => _gemmaStatus;
   double get downloadProgress => _gemmaProgress;
@@ -56,10 +48,12 @@ class ModelDownloader extends ChangeNotifier {
       final modelPath = await getModelPath(type: type);
       final file = File(modelPath);
       final exists = await file.exists();
-      
-      _gemmaStatus = exists ? DownloadStatus.downloaded : DownloadStatus.notDownloaded;
+
+      _gemmaStatus = exists
+          ? DownloadStatus.downloaded
+          : DownloadStatus.notDownloaded;
       notifyListeners();
-      
+
       return exists;
     } catch (e) {
       print('Error checking model: $e');
@@ -96,9 +90,9 @@ class ModelDownloader extends ChangeNotifier {
             final percentComplete = (progress * 100).toStringAsFixed(1);
             final receivedMB = (received / (1024 * 1024)).toStringAsFixed(1);
             final totalMB = (total / (1024 * 1024)).toStringAsFixed(1);
-            
+
             _gemmaProgress = progress;
-            
+
             print('📥 Gemma: $percentComplete% ($receivedMB MB / $totalMB MB)');
             notifyListeners();
           }
@@ -156,11 +150,11 @@ class ModelDownloader extends ChangeNotifier {
       final file = File(modelPath);
       if (await file.exists()) {
         await file.delete();
-        
+
         _gemmaStatus = DownloadStatus.notDownloaded;
         _gemmaProgress = 0.0;
         notifyListeners();
-        
+
         print('🗑️ Gemma model deleted successfully');
       }
     } catch (e) {

@@ -9,8 +9,15 @@ import 'dart:math' as math;
 
 class QuizScreen extends StatefulWidget {
   final String lessonId;
+  final String? initialContent;
+  final String? initialTopicId;
 
-  const QuizScreen({super.key, required this.lessonId});
+  const QuizScreen({
+    super.key,
+    required this.lessonId,
+    this.initialContent,
+    this.initialTopicId,
+  });
 
   @override
   State<QuizScreen> createState() => _QuizScreenState();
@@ -39,21 +46,31 @@ class _QuizScreenState extends State<QuizScreen> {
     });
 
     final provider = Provider.of<CourseProvider>(context, listen: false);
-    final topics = provider.currentTopics;
     
-    if (topics.isEmpty) {
-      setState(() => _isLoading = false);
-      return;
+    // Determine which content to use
+    String topicContent;
+    String? topicId;
+
+    // RULE 1: If it's the VERY FIRST question and we have initial content passed from the page, USE IT.
+    if (_questionsAnswered == 0 && widget.initialContent != null) {
+       topicContent = widget.initialContent!;
+       topicId = widget.initialTopicId;
+    } else {
+       // RULE 2: Otherwise, pick a random topic from the lesson
+       final topics = provider.currentTopics;
+       if (topics.isEmpty) {
+         setState(() => _isLoading = false);
+         return;
+       }
+       final topic = topics[math.Random().nextInt(topics.length)];
+       topicContent = topic.content;
+       topicId = topic.id;
     }
 
-    // Pick a random topic for variety
-    final topic = topics[math.Random().nextInt(topics.length)];
-    
     try {
-      final jsonStr = await provider.aiService.generateQuizJson(
-        topic.content, 
-        topicId: topic.id,
-      ).timeout(const Duration(seconds: 60));
+      final jsonStr = await provider.aiService
+          .generateQuizJson(topicContent, topicId: topicId)
+          .timeout(const Duration(seconds: 60));
 
       final data = jsonDecode(jsonStr);
       final List<dynamic> qList = data['questions'];
@@ -80,7 +97,7 @@ class _QuizScreenState extends State<QuizScreen> {
     }
   }
 
-  void _submitAnswer(int optionIndex) {
+  Future<void> _submitAnswer(int optionIndex) async {
     if (_isAnswered) return;
 
     setState(() {
@@ -91,6 +108,21 @@ class _QuizScreenState extends State<QuizScreen> {
         _score++;
       }
     });
+
+    try {
+      final provider = Provider.of<CourseProvider>(context, listen: false);
+      await provider.recordQuizAttempt(
+        lessonId: widget.lessonId,
+        questionText: _currentQuestion!.question,
+        options: _currentQuestion!.options,
+        correctAnswer:
+            _currentQuestion!.options[_currentQuestion!.correctOptionIndex],
+        selectedAnswer: _currentQuestion!.options[optionIndex],
+        isCorrect: optionIndex == _currentQuestion!.correctOptionIndex,
+      );
+    } catch (e) {
+      print("Error saving attempt: $e");
+    }
   }
 
   Future<void> _showResultsDialog() async {
@@ -100,7 +132,7 @@ class _QuizScreenState extends State<QuizScreen> {
     }
 
     final provider = Provider.of<CourseProvider>(context, listen: false);
-    
+
     // Save quiz attempt to database
     await provider.dbHelper.saveQuizAttempt(
       widget.lessonId,
@@ -156,13 +188,7 @@ class _QuizScreenState extends State<QuizScreen> {
                 color: color,
               ),
             ),
-            Text(
-              '$percentage%',
-              style: TextStyle(
-                fontSize: 24,
-                color: color,
-              ),
-            ),
+            Text('$percentage%', style: TextStyle(fontSize: 24, color: color)),
             const SizedBox(height: 16),
             Text(
               message,
@@ -211,149 +237,169 @@ class _QuizScreenState extends State<QuizScreen> {
               ),
             )
           : _currentQuestion == null
-              ? const Center(child: Text('Failed to load question'))
-              : Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Score Card
-                      Container(
-                        padding: const EdgeInsets.all(12),
+          ? const Center(child: Text('Failed to load question'))
+          : SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Score Card
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.cyanAccent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.stars_rounded,
+                            color: AppTheme.cyanAccent,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Score: $_score / $_questionsAnswered',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.cyanAccent,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // Question
+                    Text(
+                      _currentQuestion!.question,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // Options
+                    ...List.generate(_currentQuestion!.options.length, (index) {
+                      final isSelected = _selectedOptionIndex == index;
+                      final isCorrect =
+                          index == _currentQuestion!.correctOptionIndex;
+
+                      Color? backgroundColor;
+                      Color? borderColor;
+
+                      if (_isAnswered) {
+                        if (isCorrect) {
+                          backgroundColor = Colors.green.withOpacity(0.2);
+                          borderColor = Colors.green;
+                        } else if (isSelected) {
+                          backgroundColor = Colors.red.withOpacity(0.2);
+                          borderColor = Colors.red;
+                        }
+                      } else if (isSelected) {
+                        backgroundColor = AppTheme.cyanAccent.withOpacity(0.1);
+                        borderColor = AppTheme.cyanAccent;
+                      }
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
                         decoration: BoxDecoration(
-                          color: AppTheme.cyanAccent.withOpacity(0.1),
+                          color:
+                              backgroundColor ??
+                              (isDark ? AppTheme.darkCard : Colors.white),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color:
+                                borderColor ??
+                                (isDark
+                                    ? AppTheme.darkCard
+                                    : Colors.grey.shade300),
+                            width: 2,
+                          ),
+                        ),
+                        child: InkWell(
+                          onTap: () => _submitAnswer(index),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    _currentQuestion!.options[index],
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                ),
+                                if (_isAnswered && isCorrect)
+                                  const Icon(
+                                    Icons.check_circle,
+                                    color: Colors.green,
+                                  ),
+                                if (_isAnswered && isSelected && !isCorrect)
+                                  const Icon(Icons.cancel, color: Colors.red),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+
+                    const SizedBox(height: 32),
+
+                    // Explanation & Next Button
+                    if (_isAnswered) ...[
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? Colors.grey.shade800
+                              : Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Icon(Icons.stars_rounded, color: AppTheme.cyanAccent),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Score: $_score / $_questionsAnswered',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.cyanAccent,
-                              ),
+                            const Text(
+                              'Explanation:',
+                              style: TextStyle(fontWeight: FontWeight.bold),
                             ),
+                            const SizedBox(height: 4),
+                            Text(_currentQuestion!.explanation),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 32),
-                      
-                      // Question
-                      Text(
-                        _currentQuestion!.question,
-                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).colorScheme.onSurface,
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        height: 56,
+                        child: ElevatedButton(
+                          onPressed: _loadNextQuestion,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.cyanAccent,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          child: const Text(
+                            'Next Question',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 32),
-                      
-                      // Options
-                      ...List.generate(_currentQuestion!.options.length, (index) {
-                        final isSelected = _selectedOptionIndex == index;
-                        final isCorrect = index == _currentQuestion!.correctOptionIndex;
-                        
-                        Color? backgroundColor;
-                        Color? borderColor;
-                        
-                        if (_isAnswered) {
-                          if (isCorrect) {
-                            backgroundColor = Colors.green.withOpacity(0.2);
-                            borderColor = Colors.green;
-                          } else if (isSelected) {
-                            backgroundColor = Colors.red.withOpacity(0.2);
-                            borderColor = Colors.red;
-                          }
-                        } else if (isSelected) {
-                          backgroundColor = AppTheme.cyanAccent.withOpacity(0.1);
-                          borderColor = AppTheme.cyanAccent;
-                        }
-
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            color: backgroundColor ?? (isDark ? AppTheme.darkCard : Colors.white),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: borderColor ?? (isDark ? AppTheme.darkCard : Colors.grey.shade300),
-                              width: 2,
-                            ),
-                          ),
-                          child: InkWell(
-                            onTap: () => _submitAnswer(index),
-                            borderRadius: BorderRadius.circular(12),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      _currentQuestion!.options[index],
-                                      style: Theme.of(context).textTheme.titleMedium,
-                                    ),
-                                  ),
-                                  if (_isAnswered && isCorrect)
-                                    const Icon(Icons.check_circle, color: Colors.green),
-                                  if (_isAnswered && isSelected && !isCorrect)
-                                    const Icon(Icons.cancel, color: Colors.red),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      }),
-                      
-                      const Spacer(),
-                      
-                      // Explanation & Next Button
-                      if (_isAnswered) ...[
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: isDark ? Colors.grey.shade800 : Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Explanation:',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(_currentQuestion!.explanation),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          height: 56,
-                          child: ElevatedButton(
-                            onPressed: _loadNextQuestion,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.cyanAccent,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                            ),
-                            child: const Text(
-                              'Next Question',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
                     ],
-                  ),
+                  ],
                 ),
+              ),
+            ),
     );
   }
 }
