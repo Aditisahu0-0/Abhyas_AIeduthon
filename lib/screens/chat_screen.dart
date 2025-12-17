@@ -1,10 +1,9 @@
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import '../providers/course_provider.dart';
 import '../utils/app_theme.dart';
+import '../widgets/math_text.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -52,7 +51,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       // Use streaming chat for all cases (includes fallback message if model not loaded)
-      await for (final token in aiService.chat(text, subject: _selectedSubject).timeout(const Duration(seconds: 60))) {
+      await for (final token in aiService.chat(text, subject: _selectedSubject).timeout(const Duration(seconds: 180))) {
         setState(() {
           fullResponse += token;
           _messages.last['content'] = fullResponse;
@@ -198,12 +197,11 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ],
                     ),
-                    child: MarkdownBody(
-                      data: msg['content'] ?? '',
-                      styleSheet: MarkdownStyleSheet(
-                        p: TextStyle(
-                          color: isUser && !isDark ? Colors.white : null,
-                        ),
+                    child: MathText(
+                      msg['content'] ?? '',
+                      style: TextStyle(
+                        color: isUser && !isDark ? Colors.white : null,
+                        fontSize: 15,
                       ),
                     ),
                   ),

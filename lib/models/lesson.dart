@@ -143,13 +143,33 @@ class QuizQuestion {
   }
 
   factory QuizQuestion.fromMap(Map<String, dynamic> map) {
+    // Handle options field (can be List or pipe-separated string)
+    final List<String> optionsList = map['options'] is List 
+        ? List<String>.from(map['options'])
+        : (map['options'] as String?)?.split('|') ?? [];
+    
+    // Handle correctOptionIndex - support both old and new format
+    int correctIndex = 0;
+    
+    if (map['correctOptionIndex'] != null) {
+      // New format: integer index
+      correctIndex = map['correctOptionIndex'] as int;
+    } else if (map['correct_answer'] != null) {
+      // Old format: string answer - find the matching option
+      final correctAnswer = map['correct_answer'] as String;
+      correctIndex = optionsList.indexOf(correctAnswer);
+      if (correctIndex == -1) {
+        // Fallback if answer not found in options
+        print('⚠️ Warning: correct_answer "$correctAnswer" not found in options');
+        correctIndex = 0;
+      }
+    }
+    
     return QuizQuestion(
       id: map['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
       question: map['question'] ?? 'Unknown Question',
-      options: map['options'] is List 
-          ? List<String>.from(map['options'])
-          : (map['options'] as String?)?.split('|') ?? [],
-      correctOptionIndex: map['correctOptionIndex'] ?? 0,
+      options: optionsList,
+      correctOptionIndex: correctIndex,
       explanation: map['explanation'] ?? '',
     );
   }

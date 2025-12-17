@@ -62,7 +62,7 @@ class ModelDownloadScreen extends StatelessWidget {
                             'Model Size:',
                             style: TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          Text('~${ModelDownloader.GEMMA_EXPECTED_SIZE_MB} MB'),
+                          Text('~${ModelDownloader.QWEN_EXPECTED_SIZE_MB} MB'),
                         ],
                       ),
                       const SizedBox(height: 8),

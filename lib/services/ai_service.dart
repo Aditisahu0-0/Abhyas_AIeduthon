@@ -1,665 +1,442 @@
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
-
-import 'package:flutter_gemma/flutter_gemma.dart';
+import 'dart:async';
+import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:path_provider/path_provider.dart';
-import 'database_helper.dart';
 import 'precomputed_rag_service.dart';
-import 'accuracy_service.dart';
 
+/// AIService handles all AI model operations using llama_flutter_android
+/// Supports chat, summarization, and quiz generation with streaming
 class AIService {
-  InferenceModel? _model;
-  final DatabaseHelper _dbHelper = DatabaseHelper();
+  LlamaController? _controller;
   bool _isModelLoaded = false;
-
-  // Quiz session management
-  dynamic _quizChatSession;
-  int _quizGenerationCount = 0;
-  Set<String> _generatedQuestions = {}; // Prevent duplicates
-
-  // Chat session management for memory overflow prevention
-  dynamic _chatSession;
-  int _chatMessageCount = 0;
-  int _chatTokenCount = 0;
-  final int maxMessagesBeforeRefresh = 8; // Auto-refresh after 8 messages
-  final int maxTokensBeforeRefresh = 2000; // Auto-refresh after ~2000 tokens
+  String? _modelPath;
 
   bool get isModelLoaded => _isModelLoaded;
-  int get chatMessageCount => _chatMessageCount;
 
-  /// Clears chat session to free memory - call this when chat gets stuck
-  Future<void> clearChatSession() async {
-    print('🔄 Clearing chat session to free memory...');
-    _chatSession = null;
-    _chatMessageCount = 0;
-    _chatTokenCount = 0;
-    print('✅ Chat session cleared');
-  }
-
+  /// Initialize the AI service by loading the Qwen GGUF model
   Future<void> initialize() async {
-    if (_isModelLoaded) return;
-
     try {
-      print('=== AI SERVICE INITIALIZATION START ===');
-      print('Loading Gemma 3 1B IT model...');
+      print('🤖 Initializing AIService with llama_flutter_android...');
 
+      // Get model path
       final directory = await getApplicationDocumentsDirectory();
-      final modelPath = '${directory.path}/model.task';
-      final modelFile = File(modelPath);
+      _modelPath = '${directory.path}/qwen2.5-1.5b-instruct-q4_k_m.gguf';
 
-      if (!await modelFile.exists()) {
-        print('❌ Model file not found at: $modelPath');
-        print('Please download the model from the download screen first.');
-        _isModelLoaded = false;
-        return;
-      }
+      print('📂 Model path: $_modelPath');
 
-      print('📁 Model file found at: $modelPath');
-      print(
-        '📊 Model file size: ${await modelFile.length() ~/ (1024 * 1024)} MB',
+      // Initialize controller
+      _controller = LlamaController();
+
+      // Load the model with optimized settings
+      await _controller!.loadModel(
+        modelPath: _modelPath!,
+        threads: 4, // Prevent CPU throttling
+        contextSize: 8192, // Balanced context size for performance
       );
-
-      await FlutterGemma.installModel(
-        modelType: ModelType.gemmaIt,
-      ).fromFile(modelPath).install();
-
-      print('✅ Model installed successfully');
-
-      _model = await FlutterGemma.getActiveModel(
-        preferredBackend: PreferredBackend.cpu,
-        maxTokens: 8192,
-      );
-
-      // Initialize RAG Service (Pre-computed embeddings)
-      await PrecomputedRagService.instance.initialize();
-      
-      // Initialize Accuracy Service for scoring
-      await AccuracyService.instance.initialize();
 
       _isModelLoaded = true;
-      print('=== AI SERVICE INITIALIZATION COMPLETE ===');
+      print('✅ AIService initialized successfully!');
     } catch (e) {
-      print('❌ Error initializing AI model: $e');
       _isModelLoaded = false;
+      print('❌ Failed to initialize AIService: $e');
+      rethrow;
     }
   }
 
-  Stream<String> chat(String query, {String? subject}) async* {
-    if (!_isModelLoaded || _model == null) {
-      yield "AI model is not loaded. Please download and initialize the model first.";
+  /// Reload the model to clear KV cache and prevent context accumulation
+  /// This ensures consistent speed by starting with a clean slate
+  Future<void> _reloadModel() async {
+    if (_controller != null && _modelPath != null) {
+      print('🔄 Reloading model to clear context...');
+      try {
+        // Dispose existing controller
+        await _controller!.dispose();
+        
+        // Create fresh controller
+        _controller = LlamaController();
+        
+        // Reload model with same optimized settings
+        await _controller!.loadModel(
+          modelPath: _modelPath!,
+          threads: 4,
+          contextSize: 8192,
+        );
+        
+        print('✅ Model reloaded successfully');
+      } catch (e) {
+        print('❌ Error reloading model: $e');
+        _isModelLoaded = false;
+        rethrow;
+      }
+    }
+  }
+
+  /// Chat with the AI model using RAG context and streaming responses
+  /// Returns a stream of tokens for real-time display
+  Stream<String> chat(String userMessage, {String? subject, String? chapter}) async* {
+    if (!_isModelLoaded || _controller == null) {
+      yield '⚠️ AI model is not loaded. Please download the model first from the settings.';
       return;
     }
 
-    if (query.toLowerCase().contains('what can you do') ||
-        query.toLowerCase().contains('help')) {
-      yield "I can help you with:\\n\\n";
-      yield "✅ Explaining lesson topics\\n";
-      yield "✅ Summarizing long texts\\n";
-      yield "✅ Generating quizzes to test your knowledge\\n";
-      yield "✅ Answering questions from your offline lessons\\n";
-      return;
-    }
-
-    print('🔎 Searching pre-computed database for relevant context...');
-    final context = await PrecomputedRagService.instance.searchForContext(
-      query,
-      subjects: subject != null ? [subject] : [],
-      limit: 2, // Changed to 2 as per user request
-    );
-
-    print('   Context length: ${context.length} chars');
-
-    // FIX: Removed manual <start_of_turn> tags and added Honesty instruction
-    final prompt =
-        """You are an expert AI Tutor. Your goal is to provide accurate, structured, and helpful explanations.
-
-INSTRUCTIONS:
-1.  **Be Concise**: Limit your response to 3-5 short bullet points. Avoid fluff.
-2.  **Use Context**: Strictly use the provided context.
-3.  **No Repetition**: Do not repeat the same information.
-4.  **NO QUIZZES**: Do NOT generate multiple choice questions.
-5.  **Honesty**: If the answer is NOT in the context, say "I cannot find the answer in the provided context."
-
-Context:
-$context
-
-Student Question: $query
-""";
+    final startTime = DateTime.now();
+    int tokenCount = 0;
+    String fullResponse = '';
 
     try {
-      // Auto-refresh session if memory limit reached
-      if (_chatSession == null ||
-          _chatMessageCount >= maxMessagesBeforeRefresh ||
-          _chatTokenCount >= maxTokensBeforeRefresh) {
-        if (_chatMessageCount > 0) {
-          print('⚠️ Chat session memory limit reached. Auto-refreshing...');
-          yield "\\n\\n---\\n**Memory refreshed** - Chat history cleared to improve performance\\n---\\n\\n";
-        }
-        _chatSession = await _model!.createChat();
-        _chatMessageCount = 0;
-        _chatTokenCount = 0;
-        print('🔄 Created/refreshed chat session');
+      // Reload model to clear previous context and maintain consistent speed
+      await _reloadModel();
+      // Retrieve relevant context from RAG
+      String context = '';
+      try {
+        final ragService = PrecomputedRagService.instance;
+        context = await ragService.searchForContext(
+          userMessage,
+          subjects: subject != null ? [subject] : [],
+        );
+        print('📚 RAG context retrieved (${context.length} chars)');
+      } catch (e) {
+        print('⚠️ RAG query failed: $e');
+        // Continue without context
       }
 
-      await _chatSession!.addQueryChunk(
-        Message.text(text: prompt, isUser: true),
-      );
-      _chatMessageCount++;
+      // Build system prompt with context
+      String systemPrompt = '''You are an expert Class 9 tutor. 
+Be concise and clear. Give brief explanations with examples.
+Keep answers under 100 words.
 
-      String lastToken = "";
-      int repeatCount = 0;
-      int totalTokens = 0;
-      const int maxTokens = 150;
-      StringBuffer accumulatedResponse = StringBuffer();
+For math solutions - CRITICAL FORMATTING RULES:
+- Each equation MUST be on its OWN separate line
+- Use \$\$ equation \$\$ for display math (own line)
+- Add blank line between steps
+- Example:
+  "Multiply by conjugate:
+  
+  \$\$\\frac{1}{7+3\\sqrt{3}} \\times \\frac{7-3\\sqrt{3}}{7-3\\sqrt{3}}\$\$
+  
+  Simplify denominator:
+  
+  \$\$\\frac{7-3\\sqrt{3}}{49-27}\$\$
+  
+  Final answer:
+  
+  \$\$\\frac{7-3\\sqrt{3}}{22}\$\$"
 
-      // Track garbage patterns
-      int consecutiveAsterisks = 0;
-      int garbagePhrasesCount = 0;
-      int consecutiveSameWord = 0;
-      String lastWord = '';
-      final garbagePhrases = {
-        'and as well',
-        'This was an',
-        'I-',
-        'and as well-',
-        'This-',
-        '2-',
-      };
+NEVER put multiple equations on the same line!''';
 
-      await for (final response in _chatSession!.generateChatResponseAsync()) {
-        // Yield control to UI thread to prevent ANR
-        await Future.delayed(Duration.zero);
 
-        if (response is TextResponse) {
-          final token = response.token;
-          totalTokens++;
-
-          if (totalTokens > maxTokens) {
-            print('⚠️ Max token limit reached. Stopping generation.');
-            break;
-          }
-
-          if (token.trim() == '*') {
-            consecutiveAsterisks++;
-            if (consecutiveAsterisks > 5) {
-              print('⚠️ Too many asterisks. Response is garbage. Stopping.');
-              accumulatedResponse.clear();
-              accumulatedResponse.write(
-                "I apologize, but I couldn't find relevant information to answer your question. Please try rephrasing or check if you've selected the correct subject.",
-              );
-              break;
-            }
-          } else {
-            consecutiveAsterisks = 0;
-          }
-
-          // Improved Repetition Check: Ignore punctuation/symbols
-          final currentWord = token.trim();
-          final isPunctuation =
-              currentWord.isNotEmpty &&
-              RegExp(r'[^\w\s]').allMatches(currentWord).length ==
-                  currentWord.length;
-
-          if (!isPunctuation &&
-              currentWord.isNotEmpty &&
-              currentWord.length <= 8) {
-            if (currentWord == lastWord) {
-              consecutiveSameWord++;
-              if (consecutiveSameWord > 3) {
-                print('⚠️ Repeating single word "\$currentWord". Stopping.');
-                accumulatedResponse.clear();
-                accumulatedResponse.write(
-                  "I couldn't generate a proper response. Please try refreshing the chat.",
-                );
-                break;
-              }
-            } else {
-              consecutiveSameWord = 0;
-            }
-            lastWord = currentWord;
-          }
-
-          // Check for "This-This" pattern specifically
-          if (accumulatedResponse.length > 20) {
-            final tail = accumulatedResponse.toString().substring(
-              accumulatedResponse.length - 20,
-            );
-            if (tail.contains("This-This") || tail.contains("is-This")) {
-              print('⚠️ Detected "This-This" loop. Stopping.');
-              break;
-            }
-          }
-          
-          // PHASE REPETITION DETECTION (New Logic)
-          if (accumulatedResponse.length > 60) {
-             final currentText = accumulatedResponse.toString();
-             // Check last 30 chars
-             final lastChunk = currentText.substring(currentText.length - 30);
-             // Search in the text BEFORE the last 30 chars
-             final searchSpace = currentText.substring(0, currentText.length - 30);
-             
-             // If we find the exact same 30 char chunk recently (last 200 chars), it's a loop
-             if (searchSpace.length > 50) {
-                final recentHistory = searchSpace.substring(max(0, searchSpace.length - 200));
-                if (recentHistory.contains(lastChunk)) {
-                   print('⚠️ Detected phrase repetition loop. Stopping.');
-                   break;
-                }
-             }
-          }
-
-          for (final phrase in garbagePhrases) {
-            if (token.toLowerCase().contains(phrase.toLowerCase())) {
-              garbagePhrasesCount++;
-              if (garbagePhrasesCount > 5) {
-                print('⚠️ Too many garbage phrases. Stopping.');
-                accumulatedResponse.clear();
-                accumulatedResponse.write(
-                  "I couldn't generate a proper response. Please refresh the chat or rephrase your question.",
-                );
-                break;
-              }
-            }
-          }
-
-          final trimmedToken = token.trim();
-          if (trimmedToken.length <= 2 && (trimmedToken == lastToken.trim())) {
-            repeatCount++;
-            if (repeatCount > 3) {
-              print('⚠️ Detected punctuation loop. Stopping.');
-              break;
-            }
-          } else if (trimmedToken == lastToken.trim() &&
-              trimmedToken.length > 2) {
-            repeatCount++;
-            if (repeatCount > 2) continue;
-          } else {
-            repeatCount = 0;
-          }
-          lastToken = token;
-
-          accumulatedResponse.write(token);
-          _chatTokenCount++;
-          yield token;
-        }
+      if (context.isNotEmpty) {
+        systemPrompt += '\n\nUse the following context from the textbook to answer questions:\n$context';
       }
 
-      final finalResponse = accumulatedResponse.toString();
+      // Create chat messages in ChatML format
+      final messages = [
+        ChatMessage(role: 'system', content: systemPrompt),
+        ChatMessage(role: 'user', content: userMessage),
+      ];
+
+      // Generate response with streaming
+      await for (final token in _controller!.generateChat(
+        messages: messages,
+        template: 'chatml', // Qwen uses ChatML format
+        temperature: 0.7, // Balanced creativity
+        maxTokens: 256, // Shorter for faster response
+        topP: 0.9,
+        topK: 40,
+        repeatPenalty: 1.1, // Reduce repetition
+      )) {
+        yield token;
+        tokenCount++;
+        fullResponse += token;
+      }
       
-      // FIRE AND FORGET - Log Accuracy Scores
-      // This runs asynchronously and doesn't block the return
-      print('📊 Calculating accuracy scores for this interaction...');
-      AccuracyService.instance.calculateAndLogScores(query, context, finalResponse);
-
-      if (_isGarbageResponse(finalResponse)) {
-        yield "\\n\\n---\\n\\n**Note**: The response quality was low. Please try refreshing the chat or asking a more specific question.";
-      }
+      // Calculate metrics
+      final endTime = DateTime.now();
+      final duration = endTime.difference(startTime);
+      final tokensPerSecond = tokenCount / duration.inSeconds;
+      final qualityScore = _calculateQualityScore(fullResponse);
+      final accuracyScore = _calculateAccuracyScore(fullResponse, context);
+      
+      // Log metrics
+      print('📊 CHAT METRICS:');
+      print('   ⏱️  Time: ${duration.inSeconds}s (${duration.inMilliseconds}ms)');
+      print('   🔢 Tokens: $tokenCount');
+      print('   ⚡ Speed: ${tokensPerSecond.toStringAsFixed(2)} tok/s');
+      print('   ✨ Quality: ${qualityScore.toStringAsFixed(1)}%');
+      print('   🎯 Accuracy: ${accuracyScore.toStringAsFixed(1)}%');
     } catch (e) {
-      print('❌ Error generating response: \$e');
-      yield "Sorry, I encountered an error. Please try refreshing the chat.";
+      print('❌ Chat error: $e');
+      yield '\n\n⚠️ Error generating response: $e';
+    } finally {
+      // Optional: Dispose after chat to ensure next query starts fresh
+      // Uncomment if you want completely independent chat messages
+      // await _reloadModel();
     }
   }
 
-  bool _isGarbageResponse(String response) {
-    if (response.isEmpty) return true;
-
-    final asteriskCount = '*'.allMatches(response).length;
-    if (asteriskCount > response.length * 0.3) return true;
-
-    if (response.contains('and as well-and as well-')) return true;
-    if (response.contains('This was anThis was an')) return true;
-
-    return false;
+  /// Clear chat session (for llama_flutter_android, we don't need explicit session management)
+  /// Each generateChat call is independent
+  Future<void> clearChatSession() async {
+    // No-op for llama_flutter_android - each generateChat is stateless
+    print('🔄 Chat session cleared (stateless implementation)');
   }
 
-  Future<String> generateQuizJson(
-    String topicContent, {
-    String? topicId,
-  }) async {
-    if (!_isModelLoaded || _model == null) {
-      return _generateFallbackQuiz(topicContent);
+  /// Summarize lesson content into concise bullet points
+  Future<String> summarize(String lessonContent) async {
+    if (!_isModelLoaded || _controller == null) {
+      return '⚠️ AI model is not loaded. Please download the model first.';
     }
+
+    final startTime = DateTime.now();
+    int tokenCount = 0;
 
     try {
-      _quizChatSession = null;
+      // Reload model to clear previous context
+      await _reloadModel();
+      
+      print('📝 Generating summary...');
 
-      final model = await FlutterGemma.getActiveModel(
-        preferredBackend: PreferredBackend.cpu,
-        maxTokens: 4096,
-      );
-      _quizChatSession = await model.createChat();
-      _quizGenerationCount = 0;
-      print('🔄 Created fresh chat session for quiz generation');
+      final messages = [
+        ChatMessage(
+          role: 'system',
+          content: '''You are an expert content summarizer.
+Create 3-5 brief bullet points. Each bullet max 20 words.
+Be concise and clear.''',
+        ),
+        ChatMessage(
+          role: 'user',
+          content: 'Summarize this in 3-5 brief points:\n\n$lessonContent',
+        ),
+      ];
 
-      String limitedContent = topicContent;
-      if (topicContent.length > 2000) {
-        final maxStart = topicContent.length - 1500;
-        if (maxStart > 0) {
-          final start = Random().nextInt(maxStart);
-          final end = min(start + 1500, topicContent.length);
-          limitedContent = topicContent.substring(start, end);
-        } else {
-          limitedContent = topicContent.substring(0, 1500);
-        }
+      String summary = '';
+      await for (final token in _controller!.generateChat(
+        messages: messages,
+        template: 'chatml',
+        temperature: 0.3, // Lower temp for more focused summaries
+        maxTokens: 200, // Shorter summaries
+        topP: 0.9,
+        repeatPenalty: 1.2,
+      )) {
+        summary += token;
+        tokenCount++;
       }
 
-      // FIX: Removed manual tags, added "START YOUR RESPONSE WITH '{'"
-      final prompt =
-          """You are an expert Quiz Generator.
-Create 1 multiple-choice question based on SPECIFIC FACTS from the text below.
+      // Calculate metrics
+      final endTime = DateTime.now();
+      final duration = endTime.difference(startTime);
+      final tokensPerSecond = tokenCount / duration.inSeconds;
+      final qualityScore = _calculateSummaryQuality(summary);
+      
+      // Log metrics
+      print('📊 SUMMARY METRICS:');
+      print('   ⏱️  Time: ${duration.inSeconds}s');
+      print('   🔢 Tokens: $tokenCount');
+      print('   ⚡ Speed: ${tokensPerSecond.toStringAsFixed(2)} tok/s');
+      print('   ✨ Quality: ${qualityScore.toStringAsFixed(1)}%');
 
-CRITICAL Rules:
-1. **Ask about SPECIFIC FACTS, NUMBERS, CONCEPTS, or DEFINITIONS from the text**
-2. **NEVER ask meta-questions** like:
-   - "What is discussed about..."
-   - "What is covered in..."
-   - "What topic..."
-   - "Based on this lesson..."
-3. **Question must be directly answerable from the text**
-4. **Options**: 1 correct answer + 3 plausible distractors of the SAME TYPE
-   - If answer is a number, ALL options must be numbers
-   - If answer is a term, ALL options must be terms
-   - If answer is a definition, ALL options must be definitions
-5. **Output**: Valid JSON only, NO markdown.
-6. **START YOUR RESPONSE WITH '{'**
+      print('✅ Summary generated (${summary.length} chars)');
+      return summary;
+    } catch (e) {
+      print('❌ Summarization error: $e');
+      return '⚠️ Error generating summary: $e';
+    } finally {
+      // Dispose after summary generation to free resources
+      await _reloadModel();
+    }
+  }
 
-Text:
-$limitedContent
+  /// Generate a quiz in JSON format based on lesson content
+  /// Returns JSON string with questions array
+  Future<String> generateQuizJson(String lessonContent, {String? topicId}) async {
+    if (!_isModelLoaded || _controller == null) {
+      return '{"error": "AI model is not loaded"}';
+    }
 
-Output JSON format:
+    final startTime = DateTime.now();
+    int tokenCount = 0;
+
+    try {
+      // Reload model to clear previous context
+      await _reloadModel();
+      
+      print('📝 Generating quiz for topic: $topicId');
+
+      final messages = [
+        ChatMessage(
+          role: 'system',
+          content: '''Generate 1 quiz question in STRICT JSON format.
+
+EXAMPLE OUTPUT (copy this structure EXACTLY):
 {
-  "question": "<Specific factual question>",
-  "correct_answer": "<Correct answer>",
-  "wrong_answers": ["<Distractor 1>", "<Distractor 2>", "<Distractor 3>"]
+  "questions": [
+    {
+      "question": "What is the smallest unit of matter?",
+      "options": ["Atom", "Molecule", "Electron", "Proton"],
+      "correctOptionIndex": 0,
+      "explanation": "Atoms are basic building blocks"
+    }
+  ]
 }
 
-Important:
-- Do NOT copy template values
-- Replace placeholders with actual content
-- Ensure valid JSON
-""";
+CRITICAL RULES:
+- ALWAYS provide EXACTLY 4 options
+- correctOptionIndex must be 0, 1, 2, or 3 (the index of the correct option in the options array)
+- Options must be short (1-5 words each)
+- Explanation max 15 words
+- Return ONLY valid JSON, no markdown
+- Double-check that correctOptionIndex points to the correct option!''',
+        ),
+        ChatMessage(
+          role: 'user',
+          content: 'Generate a quiz based on this content:\n\n$lessonContent',
+        ),
+      ];
 
-      print('📝 Generating quiz question...');
-      StringBuffer fullResponse = StringBuffer();
+      String quizJson = '';
+      await for (final token in _controller!.generateChat(
+        messages: messages,
+        template: 'chatml',
+        temperature: 0.5, // Lower temp for consistent format
+        maxTokens: 200, // Reduced for faster generation
+        topP: 0.9,
+        repeatPenalty: 1.3, // Encourage question variety
+      )) {
+        quizJson += token;
+        tokenCount++;
+      }
 
-      await _quizChatSession!.addQueryChunk(
-        Message.text(text: prompt, isUser: true),
-      );
-
-      String? lastToken;
-      int repeatCount = 0;
-
-      await for (final response
-          in _quizChatSession!.generateChatResponseAsync()) {
-        // Yield control to UI thread
-        await Future.delayed(Duration.zero);
-
-        if (response is TextResponse) {
-          final token = response.token;
-
-          if (token == lastToken && token.trim().isNotEmpty) {
-            repeatCount++;
-            if (repeatCount > 5) {
-              print(
-                '⚠️ Detected repetition loop in quiz generation. Stopping.',
-              );
-              break;
-            }
-          } else {
-            repeatCount = 0;
-          }
-          lastToken = token;
-
-          // Check for "This-This" loop in quiz
-          if (fullResponse.length > 20) {
-            final tail = fullResponse.toString().substring(
-              fullResponse.length - 20,
-            );
-            if (tail.contains("This-This") || tail.contains("is-This")) {
-              print('⚠️ Detected "This-This" loop in quiz. Stopping.');
-              break;
-            }
-          }
-
-          fullResponse.write(token);
+      // Clean up the response to extract JSON
+      quizJson = quizJson.trim();
+      
+      // Try to find JSON block in markdown code fence if present
+      if (quizJson.contains('```json')) {
+        final start = quizJson.indexOf('```json') + 7;
+        final end = quizJson.indexOf('```', start);
+        if (end != -1) {
+          quizJson = quizJson.substring(start, end).trim();
+        }
+      } else if (quizJson.contains('```')) {
+        final start = quizJson.indexOf('```') + 3;
+        final end = quizJson.indexOf('```', start);
+        if (end != -1) {
+          quizJson = quizJson.substring(start, end).trim();
         }
       }
 
-      String responseText = fullResponse.toString();
-      print('✅ Raw Quiz Response: \$responseText');
+      // Calculate metrics
+      final endTime = DateTime.now();
+      final duration = endTime.difference(startTime);
+      final tokensPerSecond = tokenCount / duration.inSeconds;
+      final qualityScore = _calculateQuizQuality(quizJson);
+      
+      // Log metrics
+      print('📊 QUIZ METRICS:');
+      print('   ⏱️  Time: ${duration.inSeconds}s');
+      print('   🔢 Tokens: $tokenCount');
+      print('   ⚡ Speed: ${tokensPerSecond.toStringAsFixed(2)} tok/s');
+      print('   ✨ Quality: ${qualityScore.toStringAsFixed(1)}%');
 
-      responseText = _cleanAndRepairJson(responseText);
-
-      try {
-        final jsonResponse = jsonDecode(responseText);
-        final question = jsonResponse['question'];
-        final correct = jsonResponse['correct_answer'];
-        final wrongAnswers = List<String>.from(jsonResponse['wrong_answers']);
-
-        // Check for duplicate
-        if (_generatedQuestions.contains(question)) {
-          print('⚠️ Duplicate question detected, using fallback');
-          throw Exception("Duplicate question");
-        }
-        _generatedQuestions.add(question);
-
-        final options = [correct, ...wrongAnswers];
-        options.shuffle();
-
-        final correctIndex = options.indexOf(correct);
-
-        final quizMap = {
-          "questions": [
-            {
-              "question": question,
-              "options": options,
-              "correctOptionIndex": correctIndex,
-              "explanation": "Correct answer: \$correct",
-            },
-          ],
-        };
-
-        return jsonEncode(quizMap);
-      } catch (e) {
-        print('❌ JSON Parsing Error: \$e');
-        throw Exception("Invalid JSON format");
-      }
+      print('✅ Quiz generated (${quizJson.length} chars)');
+      return quizJson;
     } catch (e) {
-      print('❌ Quiz Generation Error: \$e');
-      return _generateFallbackQuiz(topicContent);
+      print('❌ Quiz generation error: $e');
+      return '{"error": "Failed to generate quiz: $e"}';
+    } finally {
+      // Dispose after quiz generation to free resources
+      await _reloadModel();
     }
   }
 
-  String _generateFallbackQuiz(String topicContent) {
-    print('! Using fallback quiz generation');
-    final sentences = topicContent.split(RegExp(r'(?<=[.!?])\s+'));
-    sentences.shuffle();
-
-    // Extract key facts for better questions
-    final List<String> facts = [];
-    for (var sentence in sentences) {
-      if (sentence.length > 30 && sentence.length < 200) {
-        facts.add(sentence.trim());
-      }
-      if (facts.length >= 5) break;
+  /// Dispose of resources
+  Future<void> dispose() async {
+    if (_controller != null) {
+      await _controller!.dispose();
+      _controller = null;
+      _isModelLoaded = false;
+      print('🔄 AIService disposed');
     }
-
-    if (facts.isEmpty) {
-      facts.add("This content contains important information.");
-    }
-
-    // Generate one factual question
-    final fact = facts.first;
-    final words = fact.split(' ');
-
-    // Find a keyword
-    String keyword = "concept";
-    for (var word in words) {
-      if (word.length > 6 &&
-          !['however', 'therefore', 'because'].contains(word.toLowerCase())) {
-        keyword = word.replaceAll(RegExp(r'[^\w\s]'), '');
-        break;
-      }
-    }
-
-    final question = {
-      "question":
-          "According to the content, what is described about \$keyword?",
-      "options": [
-        fact.length > 80 ? fact.substring(0, 80) + "..." : fact,
-        "This is not mentioned in the content",
-        "The opposite is stated",
-        "This is briefly mentioned without detail",
-      ]..shuffle(),
-      "correctOptionIndex":
-          0, // Will be wrong after shuffle, but doesn't matter for fallback
-      "explanation":
-          "Review the content carefully for the correct information.",
-    };
-
-    return jsonEncode({
-      "questions": [question],
-    });
   }
 
-  Future<String> summarize(String content) async {
-    if (!_isModelLoaded || _model == null) {
-      return _generateFallbackSummary(content);
+  /// Calculate quality score based on response characteristics
+  double _calculateQualityScore(String response) {
+    double score = 50.0; // Base score
+    
+    // Length check (50-500 chars ideal for brief responses)
+    if (response.length >= 50 && response.length <= 500) score += 20;
+    else if (response.length > 500) score += 10;
+    
+    // Has proper sentences (ends with punctuation)
+    if (response.contains('.') || response.contains('!') || response.contains('?')) score += 15;
+    
+    // Not too repetitive (simple check)
+    final words = response.toLowerCase().split(' ');
+    final uniqueWords = words.toSet();
+    if (uniqueWords.length / words.length > 0.5) score += 15;
+    
+    return score.clamp(0, 100);
+  }
+
+  /// Calculate accuracy score based on RAG context usage
+  double _calculateAccuracyScore(String response, String ragContext) {
+    if (ragContext.isEmpty) return 75.0; // No context to compare
+    
+    double score = 50.0;
+    
+    // Extract key terms from RAG context
+    final contextWords = ragContext.toLowerCase().split(RegExp(r'\s+'));
+    final contextKeywords = contextWords.where((w) => w.length > 4).toSet();
+    
+    // Check how many context keywords appear in response
+    final responseLower = response.toLowerCase();
+    int matchCount = 0;
+    for (var keyword in contextKeywords.take(20)) {
+      if (responseLower.contains(keyword)) matchCount++;
     }
+    
+    if (contextKeywords.isNotEmpty) {
+      score += (matchCount / contextKeywords.take(20).length) * 50;
+    }
+    
+    return score.clamp(0, 100);
+  }
 
-    // FIX: Removed manual tags
-    final prompt =
-        """Summarize the following educational content into 3-5 key bullet points for quick revision.
-Make each point clear and concise.
-Do NOT output JSON. Output strictly Markdown bullet points.
+  /// Calculate summary quality (bullet points, brevity)
+  double _calculateSummaryQuality(String summary) {
+    double score = 40.0;
+    
+    // Has bullet points or numbered list
+    if (summary.contains('-') || summary.contains('•') || RegExp(r'\d+\.').hasMatch(summary)) {
+      score += 30;
+    }
+    
+    // Reasonable length (100-400 chars)
+    if (summary.length >= 100 && summary.length <= 400) score += 20;
+    
+    // Multiple points (split by newlines)
+    final lines = summary.split('\n').where((l) => l.trim().isNotEmpty).length;
+    if (lines >= 3 && lines <= 7) score += 10;
+    
+    return score.clamp(0, 100);
+  }
 
-Content:
-$content
-
-Summary:
-""";
-
+  /// Calculate quiz quality (valid JSON, 4 options)
+  double _calculateQuizQuality(String quizJson) {
+    double score = 30.0;
+    
     try {
-      final chat = await _model!.createChat();
-      await chat.addQueryChunk(Message.text(text: prompt, isUser: true));
-
-      StringBuffer fullResponse = StringBuffer();
-      String? lastToken;
-      int repeatCount = 0;
-
-      await for (final response in chat.generateChatResponseAsync()) {
-        if (response is TextResponse) {
-          final token = response.token;
-
-          if (token == lastToken && token.trim().isNotEmpty) {
-            repeatCount++;
-            if (repeatCount > 5) {
-              print('⚠️ Detected repetition loop in summary. Stopping.');
-              break;
-            }
-          } else {
-            repeatCount = 0;
-          }
-          lastToken = token;
-
-          fullResponse.write(token);
-        }
-      }
-
-      String result = fullResponse.toString().trim();
-      if (result.isNotEmpty &&
-          !result.startsWith('*') &&
-          !result.startsWith('-') &&
-          !result.startsWith('•')) {
-        result = '* ' + result;
-      }
-
-      return result;
+      // Valid JSON structure
+      if (quizJson.contains('{') && quizJson.contains('}')) score += 20;
+      if (quizJson.contains('"questions"')) score += 20;
+      if (quizJson.contains('"options"')) score += 15;
+      
+      // Has 4 options (rough check)
+      final optionMatches = RegExp(r'"[^"]+"').allMatches(quizJson).length;
+      if (optionMatches >= 6) score += 15; // question + 4 options + answer
+      
     } catch (e) {
-      print('❌ Error generating summary: \$e');
-      return _generateFallbackSummary(content);
+      score = 20.0; // Failed parsing
     }
-  }
-
-  String _generateFallbackSummary(String content) {
-    final sentences = content
-        .split('.')
-        .where((s) => s.trim().isNotEmpty)
-        .toList();
-
-    List<String> keyPoints = [];
-
-    if (sentences.isNotEmpty) {
-      keyPoints.add("• ${sentences.first.trim()}");
-    }
-
-    for (var sentence in sentences) {
-      if (keyPoints.length >= 5) break;
-
-      final lower = sentence.toLowerCase();
-      if (lower.contains('important') ||
-          lower.contains('key') ||
-          lower.contains('main') ||
-          lower.contains('first') ||
-          lower.contains('second') ||
-          lower.contains('therefore') ||
-          lower.contains('thus')) {
-        keyPoints.add("• ${sentence.trim()}");
-      }
-    }
-
-    int index = 0;
-    while (keyPoints.length < 3 && index < sentences.length) {
-      final sentence = sentences[index].trim();
-      if (sentence.isNotEmpty && !keyPoints.any((p) => p.contains(sentence))) {
-        keyPoints.add("• \$sentence");
-      }
-      index++;
-    }
-
-    return "**Quick Summary:**\\n\\n" + keyPoints.join("\\n\\n");
-  }
-
-  void dispose() {
-    _model?.close();
-    _model = null;
-    _isModelLoaded = false;
-    _chatSession = null;
-    _quizChatSession = null;
-  }
-
-  String _cleanAndRepairJson(String raw) {
-    String cleaned = raw.replaceAll('```json', '').replaceAll('```', '').trim();
-
-    // 1. Basic trimming to find outer brackets
-    final startIndex = cleaned.indexOf('{');
-    final endIndex = cleaned.lastIndexOf('}');
-
-    if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
-      cleaned = cleaned.substring(startIndex, endIndex + 1);
-    } else {
-      // If no brackets found, try to wrap it (sometimes models just output content)
-      if (!cleaned.startsWith('{')) cleaned = '{' + cleaned;
-      if (!cleaned.endsWith('}')) cleaned = cleaned + '}';
-    }
-
-    // 2. Fix missing quotes around keys (The specific error user saw)
-    // Regex looks for words at start of line or after comma that are followed by colon but no quote
-    // e.g., correct_answer": -> "correct_answer":
-    cleaned = cleaned.replaceAllMapped(
-      RegExp(r'(?<=[,{]\s*)([a-zA-Z0-9_]+)(?=\s*":)'),
-      (match) => '"${match.group(1)}"',
-    );
-
-    // 3. Fix missing opening quotes for specific known keys if regex missed them
-    // (Backup specific to our expected schema)
-    ['question', 'correct_answer', 'wrong_answers'].forEach((key) {
-      if (cleaned.contains('\$key":') && !cleaned.contains('"\$key":')) {
-        cleaned = cleaned.replaceAll('\$key":', '"\$key":');
-      }
-    });
-
-    return cleaned;
+    
+    return score.clamp(0, 100);
   }
 }

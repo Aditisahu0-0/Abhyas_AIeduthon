@@ -7,11 +7,10 @@ import 'screens/main_navigation_screen.dart';
 import 'screens/model_download_screen.dart';
 import 'utils/app_theme.dart';
 
-import 'package:flutter_gemma/flutter_gemma.dart';
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await FlutterGemma.initialize();
+  // llama_flutter_android doesn't require global initialization
+  // Model initialization happens in AIService.initialize()
   
   runApp(
     MultiProvider(
