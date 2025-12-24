@@ -16,7 +16,11 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // llama_flutter_android doesn't require global initialization
   // Model initialization happens in AIService.initialize()
+<<<<<<< HEAD
 
+=======
+  
+>>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
   runApp(
     MultiProvider(
       providers: [

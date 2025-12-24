@@ -144,7 +144,11 @@ class QuizQuestion {
 
   factory QuizQuestion.fromMap(Map<String, dynamic> map) {
     // Handle options field (can be List or pipe-separated string)
+<<<<<<< HEAD
     List<String> optionsList = map['options'] is List 
+=======
+    final List<String> optionsList = map['options'] is List 
+>>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
         ? List<String>.from(map['options'])
         : (map['options'] as String?)?.split('|') ?? [];
     
@@ -154,6 +158,7 @@ class QuizQuestion {
     if (map['correctOptionIndex'] != null) {
       // New format: integer index
       correctIndex = map['correctOptionIndex'] as int;
+<<<<<<< HEAD
       
       // Validate range
       if (correctIndex < 0 || correctIndex >= optionsList.length) {
@@ -240,12 +245,24 @@ class QuizQuestion {
       // Ensure correctIndex is still valid
       if (correctIndex >= 4) {
         print('⚠️ correctIndex was $correctIndex, setting to 0');
+=======
+    } else if (map['correct_answer'] != null) {
+      // Old format: string answer - find the matching option
+      final correctAnswer = map['correct_answer'] as String;
+      correctIndex = optionsList.indexOf(correctAnswer);
+      if (correctIndex == -1) {
+        // Fallback if answer not found in options
+        print('⚠️ Warning: correct_answer "$correctAnswer" not found in options');
+>>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
         correctIndex = 0;
       }
     }
     
+<<<<<<< HEAD
     print('✅ Quiz validated: ${optionsList.length} options, correctIndex: $correctIndex');
     
+=======
+>>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
     return QuizQuestion(
       id: map['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
       question: map['question'] ?? 'Unknown Question',

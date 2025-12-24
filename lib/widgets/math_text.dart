@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
+<<<<<<< HEAD
 import 'package:flutter_markdown/flutter_markdown.dart';
+=======
+>>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
 
 /// Widget that renders text with inline LaTeX math expressions
 class MathText extends StatelessWidget {
@@ -11,8 +14,12 @@ class MathText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+<<<<<<< HEAD
     final themeStyle = Theme.of(context).textTheme.bodyLarge;
     final defaultStyle = style ?? themeStyle ?? const TextStyle(fontSize: 16);
+=======
+    final defaultStyle = style ?? const TextStyle(fontSize: 16);
+>>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
     
     // Split text by LaTeX delimiters: $...$ for inline, $$...$$ for display
     final parts = _parseLatex(text);
@@ -52,6 +59,7 @@ class MathText extends StatelessWidget {
           ),
         );
       } else {
+<<<<<<< HEAD
         // Regular text - render with markdown support
         final lines = part.content.split('\n');
         for (int i = 0; i < lines.length; i++) {
@@ -70,6 +78,17 @@ class MathText extends StatelessWidget {
                   em: defaultStyle.copyWith(fontStyle: FontStyle.italic),
                 ),
                 softLineBreak: true,
+=======
+        // Regular text - split by newlines and wrap properly
+        final lines = part.content.split('\n');
+        for (int i = 0; i < lines.length; i++) {
+          if (lines[i].isNotEmpty) {
+            currentLine.add(
+              Text(
+                lines[i],
+                style: defaultStyle,
+                softWrap: true,
+>>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
               ),
             );
           }
