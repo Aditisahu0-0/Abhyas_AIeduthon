@@ -4,11 +4,8 @@ import 'package:provider/provider.dart';
 import '../providers/course_provider.dart';
 import '../utils/app_theme.dart';
 import '../widgets/math_text.dart';
-<<<<<<< HEAD
 import '../services/tts_service.dart';
 import '../services/language_service.dart';
-=======
->>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -76,7 +73,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       // Use streaming chat for all cases (includes fallback message if model not loaded)
-<<<<<<< HEAD
       final stream = aiService
           .chat(text,
               subject: _selectedSubject)
@@ -110,23 +106,6 @@ class _ChatScreenState extends State<ChatScreen> {
         },
         cancelOnError: true,
       );
-=======
-      await for (final token in aiService.chat(text, subject: _selectedSubject).timeout(const Duration(seconds: 180))) {
-        setState(() {
-          fullResponse += token;
-          _messages.last['content'] = fullResponse;
-        });
-        _scrollToBottom();
-      }
-      setState(() {
-        _isTyping = false;
-      });
-    } on TimeoutException catch (_) {
-      setState(() {
-        _messages.last['content'] = "⚠️ Response timed out. The AI model is taking too long to respond. Please try again.";
-        _isTyping = false;
-      });
->>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
     } catch (e) {
       // Error already handled in stream listener
       print('Chat error: $e');
@@ -358,16 +337,6 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ],
                     ),
-<<<<<<< HEAD
-=======
-                    child: MathText(
-                      msg['content'] ?? '',
-                      style: TextStyle(
-                        color: isUser && !isDark ? Colors.white : null,
-                        fontSize: 15,
-                      ),
-                    ),
->>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
                   ),
                 );
               },

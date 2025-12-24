@@ -106,7 +106,6 @@ class _QuizScreenState extends State<QuizScreen> {
 
     try {
       final jsonStr = await provider.aiService
-<<<<<<< HEAD
           .generateQuizJson(
             topicContent,
             topicId: topicId,
@@ -114,10 +113,6 @@ class _QuizScreenState extends State<QuizScreen> {
           .timeout(
             const Duration(seconds: 300),
           ); // 5 minutes for reload + generation
-=======
-          .generateQuizJson(topicContent, topicId: topicId)
-          .timeout(const Duration(seconds: 300)); // 5 minutes for reload + generation
->>>>>>> 5789a775d90edf4535bd98f15a65e5b44813027c
 
       final data = jsonDecode(jsonStr);
       final List<dynamic> qList = data['questions'];
