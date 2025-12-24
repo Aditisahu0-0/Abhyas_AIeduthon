@@ -23,11 +23,11 @@ class AccuracyService {
     if (_isInitialized) return;
 
     try {
-      print('=== ACCURACY SERVICE INITIALIZATION START ===');
+      // print('=== ACCURACY SERVICE INITIALIZATION START ===');
       await _loadVocab();
       await _loadModel();
       _isInitialized = true;
-      print('✅ Accuracy Service initialized successfully');
+      // print('✅ Accuracy Service initialized successfully');
     } catch (e) {
       print('❌ Error initializing Accuracy Service: $e');
     }
@@ -87,11 +87,8 @@ class AccuracyService {
         // How relevant is the retrieved context to the user's question?
         final retrievalScore = _cosineSimilarity(queryEmb, contextEmb);
 
-        // 2. Faithfulness Score (Context vs Response)
-        // How much of the response is grounded in the provided context?
-        final faithfulnessScore = _cosineSimilarity(contextEmb, responseEmb);
-
-        _logMetrics(retrievalScore, faithfulnessScore);
+        // Log only retrieval score
+        print('   🔍 Retrieval: ${_formatScore(retrievalScore)}');
 
       } catch (e) {
         print('❌ Error calculating accuracy scores: $e');
@@ -152,28 +149,16 @@ class AccuracyService {
     return dotProduct / (sqrt(normA) * sqrt(normB));
   }
 
-  void _logMetrics(double retrieval, double faithfulness) {
-    print('\n');
-    print('╔════════════════════════════════════════════════════════╗');
-    print('║         📊 ACCURACY & CONFIDENCE METRICS               ║');
-    print('╠════════════════════════════════════════════════════════╣');
-    print('║  🔍 Retrieval Score    : ${_formatScore(retrieval)}    ║');
-    print('║  🤝 Faithfulness Score : ${_formatScore(faithfulness)}    ║');
-    print('╚════════════════════════════════════════════════════════╝');
-    print('\n');
-  }
-
   String _formatScore(double score) {
     final percentage = (score * 100).toStringAsFixed(1) + '%';
     String label;
-    // ADJUSTED THRESHOLDS FOR STRICTER SCORING
     if (score > 0.70) {
-      label = '(High)  ';
+      label = '(High)';
     } else if (score > 0.50) {
       label = '(Medium)';
     } else {
-      label = '(Low)   '; 
+      label = '(Low)';
     }
-    return '$percentage $label'.padRight(20);
+    return '$percentage $label';
   }
 }

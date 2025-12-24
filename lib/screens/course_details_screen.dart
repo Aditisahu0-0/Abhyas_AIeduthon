@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/lesson.dart';
 import '../providers/course_provider.dart';
+import '../services/language_service.dart';
 import 'lesson_screen.dart';
 
 class CourseDetailsScreen extends StatefulWidget {
@@ -24,6 +25,7 @@ class _CourseDetailsScreenState extends State<CourseDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final languageService = Provider.of<LanguageService>(context);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.course.title),
@@ -35,7 +37,7 @@ class _CourseDetailsScreenState extends State<CourseDetailsScreen> {
           }
 
           if (provider.currentLessons.isEmpty) {
-            return const Center(child: Text('No lessons found for this course.'));
+            return Center(child: Text(languageService.translate('No lessons found for this course.')));
           }
 
           return ListView.builder(

@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/course_provider.dart';
 import '../models/lesson.dart';
+import '../services/tts_service.dart';
+import '../services/language_service.dart';
 import '../utils/app_theme.dart';
 import 'dart:math' as math;
+import '../widgets/math_text.dart';
 
 class QuizScreen extends StatefulWidget {
   final String lessonId;
@@ -33,12 +36,20 @@ class _QuizScreenState extends State<QuizScreen> {
   bool _isAnswered = false;
 
   @override
+  void dispose() {
+    TtsService().stop();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     _loadNextQuestion();
   }
 
   Future<void> _loadNextQuestion() async {
+    final languageService = Provider.of<LanguageService>(context, listen: false);
+
     setState(() {
       _isLoading = true;
       _selectedOptionIndex = null;
@@ -46,31 +57,62 @@ class _QuizScreenState extends State<QuizScreen> {
     });
 
     final provider = Provider.of<CourseProvider>(context, listen: false);
-    
+
     // Determine which content to use
     String topicContent;
     String? topicId;
 
     // RULE 1: If it's the VERY FIRST question and we have initial content passed from the page, USE IT.
     if (_questionsAnswered == 0 && widget.initialContent != null) {
-       topicContent = widget.initialContent!;
-       topicId = widget.initialTopicId;
+      topicContent = widget.initialContent!;
+      topicId = widget.initialTopicId;
     } else {
-       // RULE 2: Otherwise, pick a random topic from the lesson
-       final topics = provider.currentTopics;
-       if (topics.isEmpty) {
-         setState(() => _isLoading = false);
-         return;
-       }
-       final topic = topics[math.Random().nextInt(topics.length)];
-       topicContent = topic.content;
-       topicId = topic.id;
+      // RULE 2: Otherwise, pick a random topic from the lesson
+      
+      // CRITICAL FIX: Ensure valid topics are loaded for *this* lesson
+      // If currentTopics is empty or belongs to a different lesson, reload!
+      if (provider.currentTopics.isEmpty || 
+          provider.currentTopics.first.lessonId != widget.lessonId) {
+         print('⚠️ Topic mismatch or empty. Loading topics for lesson: ${widget.lessonId}...');
+         await provider.loadTopics(widget.lessonId);
+      }
+
+      final topics = provider.currentTopics;
+      if (topics.isEmpty) {
+        print('❌ No topics found for lesson ${widget.lessonId}');
+        setState(() => _isLoading = false);
+        return;
+      }
+      
+      // Now safe to pick random topic
+      final topic = topics[math.Random().nextInt(topics.length)];
+      topicContent = topic.content;
+      topicId = topic.id;
     }
+
+    // Aggressively truncate content to max 850 chars (approx 200 tokens)
+    // Combined with system prompt (~300 tokens), this keeps total input around 500 tokens
+    if (topicContent.length > 850) {
+      // Pick a random chunk to ensure variety (not just the start)
+      final maxStartIndex = topicContent.length - 850;
+      final startIndex = math.Random().nextInt(maxStartIndex + 1);
+      
+      print('⚠️ Content too long. Picking random chunk from $startIndex to ${startIndex + 850}');
+      topicContent = topicContent.substring(startIndex, startIndex + 850);
+    }
+    
+    print('📝 Content Length: ${topicContent.length} chars');
+    print('📝 Content Preview: ${topicContent.substring(0, math.min(100, topicContent.length))}...');
 
     try {
       final jsonStr = await provider.aiService
-          .generateQuizJson(topicContent, topicId: topicId)
-          .timeout(const Duration(seconds: 60));
+          .generateQuizJson(
+            topicContent,
+            topicId: topicId,
+          )
+          .timeout(
+            const Duration(seconds: 300),
+          ); // 5 minutes for reload + generation
 
       final data = jsonDecode(jsonStr);
       final List<dynamic> qList = data['questions'];
@@ -87,10 +129,10 @@ class _QuizScreenState extends State<QuizScreen> {
       setState(() {
         _currentQuestion = QuizQuestion(
           id: 'mock',
-          question: 'What is the primary topic of this lesson?',
-          options: ['Science', 'History', 'Math', 'Art'],
+          question: languageService.translate('Failed to load question'),
+          options: ['Option 1', 'Option 2', 'Option 3', 'Option 4'],
           correctOptionIndex: 0,
-          explanation: 'This is a fallback question.',
+          explanation: languageService.translate('Failed to load question'),
         );
         _isLoading = false;
       });
@@ -132,6 +174,7 @@ class _QuizScreenState extends State<QuizScreen> {
     }
 
     final provider = Provider.of<CourseProvider>(context, listen: false);
+    final languageService = Provider.of<LanguageService>(context, listen: false);
 
     // Save quiz attempt to database
     await provider.dbHelper.saveQuizAttempt(
@@ -146,19 +189,19 @@ class _QuizScreenState extends State<QuizScreen> {
     Color color;
 
     if (percentage >= 80) {
-      message = 'Excellent work! Keep it up! 🌟';
+      message = languageService.translate('Excellent work! Keep it up! 🌟');
       icon = Icons.emoji_events;
       color = Colors.amber;
     } else if (percentage >= 60) {
-      message = 'Good job! Practice makes perfect! 👍';
+      message = languageService.translate('Good job! Practice makes perfect! 👍');
       icon = Icons.thumb_up;
       color = Colors.green;
     } else if (percentage >= 40) {
-      message = 'Keep trying! You\'re getting there! 💪';
+      message = languageService.translate('Keep trying! You\'re getting there! 💪');
       icon = Icons.trending_up;
       color = Colors.orange;
     } else {
-      message = 'Don\'t give up! Review and try again! 📚';
+      message = languageService.translate('Don\'t give up! Review and try again! 📚');
       icon = Icons.school;
       color = Colors.blue;
     }
@@ -174,7 +217,7 @@ class _QuizScreenState extends State<QuizScreen> {
           children: [
             Icon(icon, size: 64, color: color),
             const SizedBox(height: 16),
-            const Text('Quiz Complete!'),
+            Text(languageService.translate('Quiz Complete!')),
           ],
         ),
         content: Column(
@@ -203,7 +246,7 @@ class _QuizScreenState extends State<QuizScreen> {
               Navigator.pop(context); // Close dialog
               Navigator.pop(context); // Close quiz screen
             },
-            child: const Text('Done'),
+            child: Text(languageService.translate('Done')),
           ),
         ],
       ),
@@ -213,31 +256,32 @@ class _QuizScreenState extends State<QuizScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final languageService = Provider.of<LanguageService>(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Quiz Practice ($_questionsAnswered Done)'),
+        title: Text('${languageService.translate("Quiz Practice")} ($_questionsAnswered ${languageService.translate("Done")})'),
         actions: [
           TextButton.icon(
             onPressed: _showResultsDialog,
             icon: const Icon(Icons.exit_to_app),
-            label: const Text('Exit'),
+            label: Text(languageService.translate('Exit')),
           ),
         ],
       ),
       body: _isLoading
-          ? const Center(
+          ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Generating a unique question...'),
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(languageService.translate('Generating a unique question...')),
                 ],
               ),
             )
           : _currentQuestion == null
-          ? const Center(child: Text('Failed to load question'))
+          ? Center(child: Text(languageService.translate('Failed to load question')))
           : SingleChildScrollView(
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
@@ -260,7 +304,7 @@ class _QuizScreenState extends State<QuizScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            'Score: $_score / $_questionsAnswered',
+                            '${languageService.translate("Score")}: $_score / $_questionsAnswered',
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -273,13 +317,54 @@ class _QuizScreenState extends State<QuizScreen> {
                     const SizedBox(height: 32),
 
                     // Question
-                    Text(
-                      _currentQuestion!.question,
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.onSurface,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: MathText(
+                            _currentQuestion!.question,
+                            style: Theme.of(context).textTheme.headlineSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
+                                ),
                           ),
+                        ),
+                        AnimatedBuilder(
+                          animation: TtsService(),
+                          builder: (context, _) {
+                            final isPlayingQuestion =
+                                TtsService().isPlaying &&
+                                TtsService().currentText ==
+                                    _currentQuestion!.question;
+
+                            return IconButton(
+                              onPressed: () {
+                                if (isPlayingQuestion) {
+                                  TtsService().stop();
+                                } else {
+                                  TtsService().speak(
+                                    _currentQuestion!.question,
+                                  );
+                                }
+                              },
+                              icon: Icon(
+                                isPlayingQuestion
+                                    ? Icons.stop_rounded
+                                    : Icons.volume_up_rounded,
+                              ),
+                              color: isPlayingQuestion
+                                  ? Colors.redAccent
+                                  : AppTheme.cyanAccent,
+                              tooltip: isPlayingQuestion
+                                  ? 'Stop Reading'
+                                  : 'Read Question',
+                            );
+                          },
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 32),
 
@@ -329,7 +414,7 @@ class _QuizScreenState extends State<QuizScreen> {
                             child: Row(
                               children: [
                                 Expanded(
-                                  child: Text(
+                                  child: MathText(
                                     _currentQuestion!.options[index],
                                     style: Theme.of(
                                       context,
@@ -365,12 +450,52 @@ class _QuizScreenState extends State<QuizScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              'Explanation:',
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  languageService.translate('Explanation'),
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                AnimatedBuilder(
+                                  animation: TtsService(),
+                                  builder: (context, _) {
+                                    final isPlayingExplanation =
+                                        TtsService().isPlaying &&
+                                        TtsService().currentText ==
+                                            _currentQuestion!.explanation;
+
+                                    return IconButton(
+                                      onPressed: () {
+                                        if (isPlayingExplanation) {
+                                          TtsService().stop();
+                                        } else {
+                                          TtsService().speak(
+                                            _currentQuestion!.explanation,
+                                          );
+                                        }
+                                      },
+                                      icon: Icon(
+                                        isPlayingExplanation
+                                            ? Icons.stop_rounded
+                                            : Icons.volume_up_rounded,
+                                        size: 20,
+                                      ),
+                                      color: isPlayingExplanation
+                                          ? Colors.redAccent
+                                          : AppTheme.cyanAccent,
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      tooltip: isPlayingExplanation
+                                          ? 'Stop Reading'
+                                          : 'Read Explanation',
+                                    );
+                                  },
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 4),
-                            Text(_currentQuestion!.explanation),
+                            const SizedBox(height: 8),
+                            MathText(_currentQuestion!.explanation),
                           ],
                         ),
                       ),
@@ -385,9 +510,9 @@ class _QuizScreenState extends State<QuizScreen> {
                               borderRadius: BorderRadius.circular(16),
                             ),
                           ),
-                          child: const Text(
-                            'Next Question',
-                            style: TextStyle(
+                          child: Text(
+                            languageService.translate('Next Question'),
+                            style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
                               color: Colors.white,

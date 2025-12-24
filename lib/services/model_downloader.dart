@@ -5,51 +5,51 @@ import 'package:flutter/foundation.dart';
 
 enum DownloadStatus { notDownloaded, downloading, downloaded, error, cancelled }
 
-enum ModelType { gemma }
+enum ModelType { qwen }
 
 class ModelDownloader extends ChangeNotifier {
-  // Gemma 3 1B IT model - int4 quantized, optimized for mobile
-  static const String GEMMA_MODEL_URL =
-      'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task?download=true';
-  static const String GEMMA_MODEL_FILENAME = 'model.task';
-  static const int GEMMA_EXPECTED_SIZE_MB = 700;
+  // Qwen2.5-1.5B-Instruct Q4_K_M quantization from HuggingFace
+  static const String QWEN_MODEL_URL =
+      'https://huggingface.co/pranavsw/Qwen2.5-1.5B-Instruct-fine-tunned/resolve/main/qwen-1.5B-q4_k_m_finetuned.gguf?download=true';
+  static const String QWEN_MODEL_FILENAME = 'qwen-1.5B-q4_k_m_finetuned.gguf';
+  static const int QWEN_EXPECTED_SIZE_MB = 1000;
 
   // HuggingFace API token for downloading models
   String? get _hfToken {
-    return '';
+    return 'HF_API_TOKEN_PLACEHOLDER'; // Replace with your actual token or fetch from secure storage
   }
 
-  DownloadStatus _gemmaStatus = DownloadStatus.notDownloaded;
-  double _gemmaProgress = 0.0;
-  String? _gemmaError;
-  CancelToken? _gemmaCancelToken;
+  DownloadStatus _qwenStatus = DownloadStatus.notDownloaded;
+  double _qwenProgress = 0.0;
+  String? _qwenError;
+  CancelToken? _qwenCancelToken;
 
-  // Gemma getters
-  DownloadStatus get gemmaStatus => _gemmaStatus;
-  double get gemmaProgress => _gemmaProgress;
-  String? get gemmaError => _gemmaError;
-  bool get isGemmaDownloading => _gemmaStatus == DownloadStatus.downloading;
-  bool get isGemmaDownloaded => _gemmaStatus == DownloadStatus.downloaded;
+  // Qwen getters
+  DownloadStatus get qwenStatus => _qwenStatus;
+  double get qwenProgress => _qwenProgress;
+  String? get qwenError => _qwenError;
+  bool get isQwenDownloading => _qwenStatus == DownloadStatus.downloading;
+  bool get isQwenDownloaded => _qwenStatus == DownloadStatus.downloaded;
 
   // Legacy compatibility
-  DownloadStatus get status => _gemmaStatus;
-  double get downloadProgress => _gemmaProgress;
-  String? get errorMessage => _gemmaError;
-  bool get isDownloading => isGemmaDownloading;
-  bool get isDownloaded => isGemmaDownloaded;
+  DownloadStatus get status => _qwenStatus;
+  double get downloadProgress => _qwenProgress;
+  String? get errorMessage => _qwenError;
+  bool get isDownloading => isQwenDownloading;
+  bool get isDownloaded => isQwenDownloaded;
 
-  Future<String> getModelPath({ModelType type = ModelType.gemma}) async {
+  Future<String> getModelPath({ModelType type = ModelType.qwen}) async {
     final directory = await getApplicationDocumentsDirectory();
-    return '${directory.path}/$GEMMA_MODEL_FILENAME';
+    return '${directory.path}/$QWEN_MODEL_FILENAME';
   }
 
-  Future<bool> checkModelExists({ModelType type = ModelType.gemma}) async {
+  Future<bool> checkModelExists({ModelType type = ModelType.qwen}) async {
     try {
       final modelPath = await getModelPath(type: type);
       final file = File(modelPath);
       final exists = await file.exists();
 
-      _gemmaStatus = exists
+      _qwenStatus = exists
           ? DownloadStatus.downloaded
           : DownloadStatus.notDownloaded;
       notifyListeners();
@@ -61,29 +61,29 @@ class ModelDownloader extends ChangeNotifier {
     }
   }
 
-  Future<void> downloadModel({ModelType type = ModelType.gemma}) async {
-    if (_gemmaStatus == DownloadStatus.downloading) {
-      print('Gemma download already in progress');
+  Future<void> downloadModel({ModelType type = ModelType.qwen}) async {
+    if (_qwenStatus == DownloadStatus.downloading) {
+      print('Qwen download already in progress');
       return;
     }
 
-    _gemmaStatus = DownloadStatus.downloading;
-    _gemmaProgress = 0.0;
-    _gemmaError = null;
-    _gemmaCancelToken = CancelToken();
+    _qwenStatus = DownloadStatus.downloading;
+    _qwenProgress = 0.0;
+    _qwenError = null;
+    _qwenCancelToken = CancelToken();
     notifyListeners();
 
     try {
       final modelPath = await getModelPath(type: type);
       final dio = Dio();
 
-      print('🚀 Starting Gemma download from HuggingFace...');
-      print('📦 Model: Gemma3-1B-IT (~$GEMMA_EXPECTED_SIZE_MB MB)');
+      print('🚀 Starting NCERT Model download from HuggingFace...');
+      print('📦 Model: NCERT Q4_K_M (~$QWEN_EXPECTED_SIZE_MB MB)');
 
       await dio.download(
-        GEMMA_MODEL_URL,
+        QWEN_MODEL_URL,
         modelPath,
-        cancelToken: _gemmaCancelToken,
+        cancelToken: _qwenCancelToken,
         onReceiveProgress: (received, total) {
           if (total != -1) {
             final progress = received / total;
@@ -91,9 +91,11 @@ class ModelDownloader extends ChangeNotifier {
             final receivedMB = (received / (1024 * 1024)).toStringAsFixed(1);
             final totalMB = (total / (1024 * 1024)).toStringAsFixed(1);
 
-            _gemmaProgress = progress;
+            _qwenProgress = progress;
 
-            print('📥 Gemma: $percentComplete% ($receivedMB MB / $totalMB MB)');
+            print(
+              '📥 NCERT Model: $percentComplete% ($receivedMB MB / $totalMB MB)',
+            );
             notifyListeners();
           }
         },
@@ -114,55 +116,55 @@ class ModelDownloader extends ChangeNotifier {
       final file = File(modelPath);
       final fileSize = await file.length();
       final fileSizeMB = fileSize / (1024 * 1024);
-      print('✅ Gemma downloaded successfully!');
+      print('✅ NCERT Model downloaded successfully!');
       print('📊 File size: ${fileSizeMB.toStringAsFixed(2)} MB');
 
-      _gemmaStatus = DownloadStatus.downloaded;
-      _gemmaProgress = 1.0;
+      _qwenStatus = DownloadStatus.downloaded;
+      _qwenProgress = 1.0;
       notifyListeners();
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
-        _gemmaStatus = DownloadStatus.cancelled;
-        _gemmaError = 'Download cancelled';
+        _qwenStatus = DownloadStatus.cancelled;
+        _qwenError = 'Download cancelled';
       } else {
-        _gemmaStatus = DownloadStatus.error;
-        _gemmaError = 'Download failed: ${e.message}';
+        _qwenStatus = DownloadStatus.error;
+        _qwenError = 'Download failed: ${e.message}';
       }
-      print('❌ Gemma download error: $e');
+      print('❌ NCERT Model download error: $e');
       notifyListeners();
     } catch (e) {
-      _gemmaStatus = DownloadStatus.error;
-      _gemmaError = 'Unexpected error: $e';
-      print('❌ Gemma unexpected error: $e');
+      _qwenStatus = DownloadStatus.error;
+      _qwenError = 'Unexpected error: $e';
+      print('❌ NCERT Model unexpected error: $e');
       notifyListeners();
     }
   }
 
-  void cancelDownload({ModelType type = ModelType.gemma}) {
-    if (_gemmaCancelToken != null && !_gemmaCancelToken!.isCancelled) {
-      _gemmaCancelToken!.cancel('User cancelled');
+  void cancelDownload({ModelType type = ModelType.qwen}) {
+    if (_qwenCancelToken != null && !_qwenCancelToken!.isCancelled) {
+      _qwenCancelToken!.cancel('User cancelled');
     }
   }
 
-  Future<void> deleteModel({ModelType type = ModelType.gemma}) async {
+  Future<void> deleteModel({ModelType type = ModelType.qwen}) async {
     try {
       final modelPath = await getModelPath(type: type);
       final file = File(modelPath);
       if (await file.exists()) {
         await file.delete();
 
-        _gemmaStatus = DownloadStatus.notDownloaded;
-        _gemmaProgress = 0.0;
+        _qwenStatus = DownloadStatus.notDownloaded;
+        _qwenProgress = 0.0;
         notifyListeners();
 
-        print('🗑️ Gemma model deleted successfully');
+        print('🗑️ NCERT Model deleted successfully');
       }
     } catch (e) {
       print('Error deleting model: $e');
     }
   }
 
-  Future<int> getModelSize({ModelType type = ModelType.gemma}) async {
+  Future<int> getModelSize({ModelType type = ModelType.qwen}) async {
     try {
       final modelPath = await getModelPath(type: type);
       final file = File(modelPath);

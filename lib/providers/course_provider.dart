@@ -1,13 +1,22 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../models/lesson.dart';
-import '../services/database_helper.dart';
 import '../services/ai_service.dart';
+import '../services/database_helper.dart';
+import '../services/sync_service.dart';
 import '../services/precomputed_rag_service.dart';
 
 class CourseProvider with ChangeNotifier {
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final AIService _aiService = AIService();
+
+  CourseProvider() {
+    // Initialize services
+    // Note: _aiService.initialize() is handled by initAI() which is called later.
+    // SyncService needs to be initialized early to start listening for changes.
+    SyncService().init();
+  }
+
   BuildContext? _context;
 
   void setContext(BuildContext context) {

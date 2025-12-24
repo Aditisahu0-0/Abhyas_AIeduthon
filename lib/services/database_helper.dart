@@ -491,4 +491,16 @@ class DatabaseHelper {
       ORDER BY timestamp DESC
     ''');
   }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedQuizAttempts() async {
+    final db = await database;
+    return await db.query('quiz_question_attempts', where: 'synced = 0');
+  }
+
+  Future<void> markQuizAttemptsAsSynced(List<int> ids) async {
+    final db = await database;
+    await db.rawUpdate(
+      'UPDATE quiz_question_attempts SET synced = 1 WHERE id IN (${ids.join(',')})',
+    );
+  }
 }

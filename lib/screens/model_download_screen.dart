@@ -2,15 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/model_downloader.dart';
 import '../providers/course_provider.dart';
+import '../services/language_service.dart';
 
 class ModelDownloadScreen extends StatelessWidget {
   const ModelDownloadScreen({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    final languageService = Provider.of<LanguageService>(context);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AI Model Setup'),
+        title: Text(languageService.translate('AI Model Setup')),
         centerTitle: true,
       ),
       body: Consumer<ModelDownloader>(
@@ -28,24 +31,24 @@ class ModelDownloadScreen extends StatelessWidget {
                   color: Colors.deepPurple,
                 ),
                 const SizedBox(height: 32),
-                const Text(
-                  'AI-Powered Learning',
-                  style: TextStyle(
+                Text(
+                  languageService.translate('AI-Powered Learning'),
+                  style: const TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
                   ),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 16),
-                const Text(
-                  'Download the AI model to unlock:',
-                  style: TextStyle(fontSize: 16),
+                Text(
+                  languageService.translate('Download the AI model to unlock:'),
+                  style: const TextStyle(fontSize: 16),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 24),
-                _buildFeatureItem(Icons.chat, 'AI Doubt Solving', 'Ask questions and get instant answers'),
-                _buildFeatureItem(Icons.quiz, 'Smart Quiz Generation', 'AI-generated questions from lessons'),
-                _buildFeatureItem(Icons.summarize, 'Intelligent Summaries', 'Key points extraction with AI'),
+                _buildFeatureItem(Icons.chat, languageService.translate('AI Doubt Solving'), languageService.translate('Ask questions and get instant answers')),
+                _buildFeatureItem(Icons.quiz, languageService.translate('Smart Quiz Generation'), languageService.translate('AI-generated questions from lessons')),
+                _buildFeatureItem(Icons.summarize, languageService.translate('Intelligent Summaries'), languageService.translate('Key points extraction with AI')),
                 const SizedBox(height: 32),
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -58,17 +61,17 @@ class ModelDownloadScreen extends StatelessWidget {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text(
-                            'Model Size:',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                          Text(
+                            languageService.translate('Model Size:'),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          Text('~${ModelDownloader.GEMMA_EXPECTED_SIZE_MB} MB'),
+                          Text('~${ModelDownloader.QWEN_EXPECTED_SIZE_MB} MB'),
                         ],
                       ),
                       const SizedBox(height: 8),
-                      const Text(
-                        'One-time download. Works offline after installation.',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      Text(
+                        languageService.translate('One-time download. Works offline after installation.'),
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
                       ),
                     ],
                   ),
@@ -95,7 +98,7 @@ class ModelDownloadScreen extends StatelessWidget {
                     onPressed: () {
                       downloader.cancelDownload();
                     },
-                    child: const Text('Cancel Download'),
+                    child: Text(languageService.translate('Cancel Download')),
                   ),
                 ] else if (downloader.status == DownloadStatus.error) ...[
                   Container(
@@ -120,21 +123,21 @@ class ModelDownloadScreen extends StatelessWidget {
                       backgroundColor: Colors.deepPurple,
                       foregroundColor: Colors.white,
                     ),
-                    child: const Text('Retry Download', style: TextStyle(fontSize: 16)),
+                    child: Text(languageService.translate('Retry Download'), style: const TextStyle(fontSize: 16)),
                   ),
                 ] else if (downloader.status == DownloadStatus.downloaded) ...[
                   const Icon(Icons.check_circle, color: Colors.green, size: 60),
                   const SizedBox(height: 16),
-                  const Text(
-                    'Model Downloaded Successfully!',
+                  Text(
+                    languageService.translate('Model Downloaded Successfully!'),
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Initializing AI...',
+                  Text(
+                    languageService.translate('Initializing AI...'),
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: Colors.grey),
+                    style: const TextStyle(fontSize: 14, color: Colors.grey),
                   ),
                   const SizedBox(height: 16),
                   ElevatedButton(
@@ -151,7 +154,7 @@ class ModelDownloadScreen extends StatelessWidget {
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                     ),
-                    child: const Text('Continue to App', style: TextStyle(fontSize: 16)),
+                    child: Text(languageService.translate('Continue to App'), style: const TextStyle(fontSize: 16)),
                   ),
                 ] else ...[
                   ElevatedButton(
@@ -163,7 +166,7 @@ class ModelDownloadScreen extends StatelessWidget {
                       backgroundColor: Colors.deepPurple,
                       foregroundColor: Colors.white,
                     ),
-                    child: const Text('Download AI Model', style: TextStyle(fontSize: 16)),
+                    child: Text(languageService.translate('Download AI Model'), style: const TextStyle(fontSize: 16)),
                   ),
                   const SizedBox(height: 12),
                   
@@ -174,7 +177,7 @@ class ModelDownloadScreen extends StatelessWidget {
                     onPressed: () {
                       Navigator.of(context).pushReplacementNamed('/');
                     },
-                    child: const Text('Skip for Now (Limited Features)'),
+                    child: Text(languageService.translate('Skip for Now (Limited Features)')),
                   ),
                 ],
               ],

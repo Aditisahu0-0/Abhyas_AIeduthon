@@ -3,22 +3,29 @@ import 'package:provider/provider.dart';
 import 'providers/course_provider.dart';
 import 'providers/theme_provider.dart';
 import 'services/model_downloader.dart';
+import 'services/auth_service.dart';
+import 'services/sync_service.dart';
+import 'services/language_service.dart';
 import 'screens/main_navigation_screen.dart';
 import 'screens/model_download_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/signup_screen.dart';
 import 'utils/app_theme.dart';
-
-import 'package:flutter_gemma/flutter_gemma.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await FlutterGemma.initialize();
-  
+  // llama_flutter_android doesn't require global initialization
+  // Model initialization happens in AIService.initialize()
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => CourseProvider()),
         ChangeNotifierProvider(create: (_) => ModelDownloader()),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(create: (_) => AuthService()),
+        ChangeNotifierProvider(create: (_) => SyncService()),
+        ChangeNotifierProvider(create: (_) => LanguageService()),
       ],
       child: const MyApp(),
     ),
@@ -30,8 +37,8 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<ThemeProvider>(
-      builder: (context, themeProvider, child) {
+    return Consumer2<ThemeProvider, LanguageService>(
+      builder: (context, themeProvider, languageService, child) {
         return MaterialApp(
           title: 'ABHYAS',
           debugShowCheckedModeBanner: false,
@@ -42,6 +49,8 @@ class MyApp extends StatelessWidget {
           routes: {
             '/home': (context) => const MainNavigationScreen(),
             '/download': (context) => const ModelDownloadScreen(),
+            '/login': (context) => const LoginScreen(),
+            '/signup': (context) => const SignupScreen(),
           },
         );
       },
@@ -65,26 +74,41 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _initializeApp() async {
     final downloader = Provider.of<ModelDownloader>(context, listen: false);
-    
-    // Check if model exists
+    final authService = Provider.of<AuthService>(context, listen: false);
+
+    // Run checks in parallel to save time, or sequential if dependency needed
     final modelExists = await downloader.checkModelExists();
-    
+    final isAuthValid = await authService
+        .checkAuthValidity(); // Checks expiry too
+
     // Small delay for splash effect
     await Future.delayed(const Duration(seconds: 2));
-    
+
     if (!mounted) return;
-    
+
     if (modelExists) {
-      Navigator.of(context).pushReplacementNamed('/home');
+      if (isAuthValid) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      } else {
+        Navigator.of(context).pushReplacementNamed('/login');
+      }
     } else {
-      Navigator.of(context).pushReplacementNamed('/download');
+      // If model missing, prioritize download, BUT we might want Auth first?
+      // For now, let's say Auth is prerequisites for everything except maybe public info.
+      // But typically, download screen might need internet, so let's let them login first.
+
+      if (isAuthValid) {
+        Navigator.of(context).pushReplacementNamed('/download');
+      } else {
+        Navigator.of(context).pushReplacementNamed('/login');
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
@@ -128,9 +152,9 @@ class _SplashScreenState extends State<SplashScreen> {
                 shaderCallback: (bounds) => const LinearGradient(
                   colors: [AppTheme.cyanAccent, AppTheme.cyanSecondary],
                 ).createShader(bounds),
-                child: const Text(
-                  'ABHYAS',
-                  style: TextStyle(
+                child: Text(
+                  Provider.of<LanguageService>(context).translate('ABHYAS'),
+                  style: const TextStyle(
                     fontSize: 48,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
@@ -140,10 +164,12 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Learn. Practice. Excel.',
+                Provider.of<LanguageService>(context).translate('Learn. Practice. Excel.'),
                 style: TextStyle(
                   fontSize: 16,
-                  color: isDark ? AppTheme.darkTextSecondary : AppTheme.lightTextSecondary,
+                  color: isDark
+                      ? AppTheme.darkTextSecondary
+                      : AppTheme.lightTextSecondary,
                   letterSpacing: 1,
                 ),
               ),
